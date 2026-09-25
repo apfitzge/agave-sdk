@@ -2,7 +2,7 @@ use {
     super::payload_ring::{PayloadHandle, PayloadRing},
     crate::{
         Event,
-        backend::{AtomicStreamRule, StreamGuard},
+        backend::linux::{AtomicStreamRule, StreamGuard},
         publisher::PublishError,
     },
     std::{collections::VecDeque, fmt::Debug, num::NonZeroUsize, sync::Arc},
