@@ -81,16 +81,10 @@ fn sanitize_signatures(view: &UnsanitizedTransactionView<impl TransactionData>) 
 }
 
 /// Accounts (aka Addresses) Constraints:
-/// * for v1: 1 <= NumAddresses <= 64
-///   * legacy/v0 uses current limits of: num_accounts <= 256 (u8 bound)
+/// * num_accounts <= 256 (u8 account-index bound)
 /// * No duplicate addresses
 fn sanitize_account_access(view: &UnsanitizedTransactionView<impl TransactionData>) -> Result<()> {
-    let addresses_limit = match view.version() {
-        TransactionVersion::Legacy | TransactionVersion::V0 => 256,
-        TransactionVersion::V1 => 64,
-    };
-
-    if total_number_of_accounts(view) > addresses_limit {
+    if total_number_of_accounts(view) > 256 {
         return Err(TransactionViewError::SanitizeError);
     }
 
@@ -524,27 +518,6 @@ mod tests {
                         readonly_indexes: (0..100).collect(),
                     },
                 ],
-            );
-            let data = wincode::serialize(&transaction).unwrap();
-            let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
-            assert_eq!(
-                sanitize_account_access(&view),
-                Err(TransactionViewError::SanitizeError)
-            );
-        }
-
-        // V1: too many static accounts.
-        {
-            let transaction = create_v1_transaction(
-                1,
-                MessageHeader {
-                    num_required_signatures: 1,
-                    num_readonly_signed_accounts: 0,
-                    num_readonly_unsigned_accounts: 63,
-                },
-                (0..65).map(|_| Pubkey::new_unique()).collect(),
-                vec![],
-                TransactionConfig::empty(),
             );
             let data = wincode::serialize(&transaction).unwrap();
             let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
