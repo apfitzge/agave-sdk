@@ -198,8 +198,8 @@ impl TransactionFrame {
 
         // In wire format:
         // - Legacy/v0 transactions start with signatures (compact-u16 count).
-        //   Packet size limits keep the signature count well below 128, so the
-        //   first byte never has MSB set.
+        //   Dispatch accepts only one-byte counts (MSB clear); first bytes
+        //   with MSB set are reserved for versioned transactions.
         // - v1 transactions start with a version byte with MSB = 1.
         Ok((first_byte & solana_message::MESSAGE_VERSION_PREFIX) == 0)
     }

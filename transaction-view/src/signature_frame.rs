@@ -3,20 +3,9 @@ use {
         bytes::{advance_offset_for_array, read_byte},
         result::{Result, TransactionViewError},
     },
-    solana_packet::PACKET_DATA_SIZE,
-    solana_pubkey::Pubkey,
+    solana_message::MESSAGE_VERSION_PREFIX,
     solana_signature::Signature,
 };
-
-// The packet has a maximum length of 1232 bytes.
-// Each signature must be paired with a unique static pubkey, so each
-// signature really requires 96 bytes. This means the maximum number of
-// signatures in a **valid** transaction packet is 12.
-// In our u16 encoding scheme, 12 would be encoded as a single byte.
-// Rather than using the u16 decoding, we can simply read the byte and
-// verify that the MSB is not set.
-pub(crate) const MAX_SIGNATURES_PER_PACKET: u8 =
-    (PACKET_DATA_SIZE / (core::mem::size_of::<Signature>() + core::mem::size_of::<Pubkey>())) as u8;
 
 /// Metadata for accessing transaction-level signatures in a transaction view.
 #[derive(Debug, Clone)]
@@ -32,12 +21,10 @@ impl SignatureFrame {
     /// the transaction packet, starting at the given `offset`.
     #[inline(always)]
     pub(crate) fn try_new(bytes: &[u8], offset: &mut usize) -> Result<Self> {
-        // Maximum number of signatures should be represented by a single byte,
-        // thus the MSB should not be set.
-        const _: () = assert!(MAX_SIGNATURES_PER_PACKET & 0b1000_0000 == 0);
-
+        // Transaction version dispatch reserves first bytes with the MSB set
+        // for versioned transactions. Legacy/v0 counts must fit in one byte.
         let num_signatures = read_byte(bytes, offset)?;
-        if num_signatures == 0 || num_signatures > MAX_SIGNATURES_PER_PACKET {
+        if num_signatures == 0 || num_signatures & MESSAGE_VERSION_PREFIX != 0 {
             return Err(TransactionViewError::ParseError);
         }
 
@@ -77,14 +64,14 @@ mod tests {
     }
 
     #[test]
-    fn test_max_signatures() {
-        let signatures = vec![Signature::default(); usize::from(MAX_SIGNATURES_PER_PACKET)];
+    fn test_max_one_byte_signature_count() {
+        let signatures = vec![Signature::default(); 127];
         let bytes = serialize_short_vec(&signatures);
         let mut offset = 0;
         let frame = SignatureFrame::try_new(&bytes, &mut offset).unwrap();
-        assert_eq!(frame.num_signatures, 12);
+        assert_eq!(frame.num_signatures, 127);
         assert_eq!(frame.offset, 1);
-        assert_eq!(offset, 1 + 12 * core::mem::size_of::<Signature>());
+        assert_eq!(offset, 1 + 127 * core::mem::size_of::<Signature>());
     }
 
     #[test]
@@ -99,8 +86,8 @@ mod tests {
     }
 
     #[test]
-    fn test_too_many_signatures() {
-        let signatures = vec![Signature::default(); usize::from(MAX_SIGNATURES_PER_PACKET) + 1];
+    fn test_multibyte_signature_count() {
+        let signatures = vec![Signature::default(); 128];
         let bytes = serialize_short_vec(&signatures);
         let mut offset = 0;
         assert!(SignatureFrame::try_new(&bytes, &mut offset).is_err());

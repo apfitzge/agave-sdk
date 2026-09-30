@@ -1,6 +1,5 @@
 use crate::{
     result::{Result, TransactionViewError},
-    signature_frame::MAX_SIGNATURES_PER_PACKET,
     transaction_data::TransactionData,
     transaction_version::TransactionVersion,
     transaction_view::UnsanitizedTransactionView,
@@ -60,14 +59,9 @@ fn sanitize_message_header(view: &UnsanitizedTransactionView<impl TransactionDat
 
 /// Sigantures Constraint:
 /// * Number of signatures must equal: num_required_signatures
-/// * Max signatures <= 12
 fn sanitize_signatures(view: &UnsanitizedTransactionView<impl TransactionData>) -> Result<()> {
     // Check the required number of signatures matches the number of signatures.
     if view.num_signatures() != view.num_required_signatures() {
-        return Err(TransactionViewError::SanitizeError);
-    }
-
-    if view.num_signatures() > MAX_SIGNATURES_PER_PACKET {
         return Err(TransactionViewError::SanitizeError);
     }
 
@@ -321,45 +315,6 @@ mod tests {
                 },
                 (0..1).map(|_| Pubkey::new_unique()).collect(),
                 vec![],
-            );
-            let data = wincode::serialize(&transaction).unwrap();
-            let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
-            assert_eq!(
-                sanitize_signatures(&view),
-                Err(TransactionViewError::SanitizeError)
-            );
-        }
-
-        // More than 12 signatures.
-        {
-            let transaction = create_legacy_transaction(
-                13,
-                MessageHeader {
-                    num_required_signatures: 13,
-                    num_readonly_signed_accounts: 0,
-                    num_readonly_unsigned_accounts: 0,
-                },
-                (0..13).map(|_| Pubkey::new_unique()).collect(),
-                vec![],
-            );
-            let data = wincode::serialize(&transaction).unwrap();
-            let view = TransactionView::try_new_unsanitized(data.as_ref());
-            // SignatureFrame validates number of signatures, it throw ParseError if
-            // it is less than 12
-            assert!(matches!(view, Err(TransactionViewError::ParseError)));
-        }
-
-        {
-            let transaction = create_v1_transaction(
-                13,
-                MessageHeader {
-                    num_required_signatures: 13,
-                    num_readonly_signed_accounts: 0,
-                    num_readonly_unsigned_accounts: 0,
-                },
-                (0..13).map(|_| Pubkey::new_unique()).collect(),
-                vec![],
-                TransactionConfig::empty(),
             );
             let data = wincode::serialize(&transaction).unwrap();
             let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
