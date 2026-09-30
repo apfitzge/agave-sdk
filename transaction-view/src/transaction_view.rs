@@ -1,13 +1,9 @@
 use {
     crate::{
         address_table_lookup_frame::AddressTableLookupIterator,
-        instructions_frame::InstructionsIterator,
-        result::Result,
-        sanitize::{SanitizeConfig, sanitize},
-        transaction_config_frame::TransactionConfigView,
-        transaction_data::TransactionData,
-        transaction_frame::TransactionFrame,
-        transaction_version::TransactionVersion,
+        instructions_frame::InstructionsIterator, result::Result, sanitize::sanitize,
+        transaction_config_frame::TransactionConfigView, transaction_data::TransactionData,
+        transaction_frame::TransactionFrame, transaction_version::TransactionVersion,
     },
     core::fmt::{Debug, Formatter},
     solana_hash::Hash,
@@ -59,8 +55,8 @@ impl<D: TransactionData> TransactionView<false, D> {
     }
 
     /// Sanitizes the transaction view, returning a sanitized view on success.
-    pub fn sanitize(self, config: &SanitizeConfig) -> Result<SanitizedTransactionView<D>> {
-        sanitize(&self, config)?;
+    pub fn sanitize(self) -> Result<SanitizedTransactionView<D>> {
+        sanitize(&self)?;
         Ok(SanitizedTransactionView {
             data: self.data,
             frame: self.frame,
@@ -70,9 +66,9 @@ impl<D: TransactionData> TransactionView<false, D> {
 
 impl<D: TransactionData> TransactionView<true, D> {
     /// Creates a new `TransactionView`, running sanitization checks.
-    pub fn try_new_sanitized(data: D, config: &SanitizeConfig) -> Result<Self> {
+    pub fn try_new_sanitized(data: D) -> Result<Self> {
         let unsanitized_view = TransactionView::try_new_unsanitized(data)?;
-        unsanitized_view.sanitize(config)
+        unsanitized_view.sanitize()
     }
 
     /// Creates a new `TransactionView`, running sanitization checks,
@@ -81,13 +77,10 @@ impl<D: TransactionData> TransactionView<true, D> {
     /// Unlike [`Self::try_new_sanitized`], `data` may contain trailing bytes
     /// after the serialized transaction. See
     /// [`TransactionView::try_new_unsanitized_from_prefix`].
-    pub fn try_new_sanitized_from_prefix(
-        data: D,
-        config: &SanitizeConfig,
-    ) -> Result<(Self, usize)> {
+    pub fn try_new_sanitized_from_prefix(data: D) -> Result<(Self, usize)> {
         let (unsanitized_view, consumed_len) =
             TransactionView::try_new_unsanitized_from_prefix(data)?;
-        Ok((unsanitized_view.sanitize(config)?, consumed_len))
+        Ok((unsanitized_view.sanitize()?, consumed_len))
     }
 }
 
@@ -607,16 +600,6 @@ mod tests {
         assert_eq!(instructions[0].data, &[1, 2, 3, 4]);
     }
 
-    // Current protocol values; production callers supply these from agave.
-    fn test_sanitize_config() -> SanitizeConfig {
-        SanitizeConfig {
-            min_requested_heap_size: 32 * 1024,
-            max_requested_heap_size: 256 * 1024,
-            max_instructions: 64,
-            max_accounts_per_instruction: 255,
-        }
-    }
-
     fn append_trailing_bytes(transaction_bytes: &[u8]) -> Vec<u8> {
         let mut bytes_with_trailing = transaction_bytes.to_vec();
         bytes_with_trailing.extend_from_slice(&[0xAA; 7]);
@@ -692,11 +675,8 @@ mod tests {
         let bytes_with_trailing = append_trailing_bytes(&transaction_bytes);
 
         // when parsing from the prefix of the buffer and sanitizing
-        let (view, consumed_len) = TransactionView::try_new_sanitized_from_prefix(
-            bytes_with_trailing.as_slice(),
-            &test_sanitize_config(),
-        )
-        .unwrap();
+        let (view, consumed_len) =
+            TransactionView::try_new_sanitized_from_prefix(bytes_with_trailing.as_slice()).unwrap();
 
         // then sanitization passes and the view excludes the trailing bytes
         assert_eq!(consumed_len, transaction_bytes.len());

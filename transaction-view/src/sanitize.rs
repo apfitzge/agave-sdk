@@ -6,32 +6,12 @@ use crate::{
     transaction_view::UnsanitizedTransactionView,
 };
 
-/// Protocol limits enforced during sanitization.
-///
-/// These values are consensus parameters owned by the caller; this crate
-/// intentionally does not define defaults for them.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct SanitizeConfig {
-    /// Inclusive lower bound for a V1 requested heap size, in bytes.
-    pub min_requested_heap_size: u32,
-    /// Inclusive upper bound for a V1 requested heap size, in bytes.
-    pub max_requested_heap_size: u32,
-    /// SIMD-160: maximum number of top-level instructions.
-    pub max_instructions: usize,
-    /// SIMD-406: maximum number of accounts per instruction.
-    pub max_accounts_per_instruction: usize,
-}
-
-pub(crate) fn sanitize(
-    view: &UnsanitizedTransactionView<impl TransactionData>,
-    config: &SanitizeConfig,
-) -> Result<()> {
+pub(crate) fn sanitize(view: &UnsanitizedTransactionView<impl TransactionData>) -> Result<()> {
     sanitize_transaction_size(view)?;
     sanitize_message_header(view)?;
-    sanitize_config(view, config)?;
     sanitize_signatures(view)?;
     sanitize_account_access(view)?;
-    sanitize_instructions(view, config)?;
+    sanitize_instructions(view)?;
     sanitize_address_table_lookups(view)
 }
 
@@ -71,25 +51,6 @@ fn sanitize_message_header(view: &UnsanitizedTransactionView<impl TransactionDat
         > view
             .num_static_account_keys()
             .wrapping_sub(view.num_required_signatures())
-    {
-        return Err(TransactionViewError::SanitizeError);
-    }
-
-    Ok(())
-}
-
-/// Config Constraints:
-/// * heap_size must be multiples of 1024, if specified
-fn sanitize_config(
-    view: &UnsanitizedTransactionView<impl TransactionData>,
-    config: &SanitizeConfig,
-) -> Result<()> {
-    if let Some(requested_heap_bytes) = view
-        .transaction_config()
-        .and_then(|config| config.requested_heap_size())
-        && (!(config.min_requested_heap_size..=config.max_requested_heap_size)
-            .contains(&requested_heap_bytes)
-            || !requested_heap_bytes.is_multiple_of(1024))
     {
         return Err(TransactionViewError::SanitizeError);
     }
@@ -141,19 +102,10 @@ fn sanitize_account_access(view: &UnsanitizedTransactionView<impl TransactionDat
 }
 
 /// Instructions Constraints
-/// * NumInstructions <= 64
 /// * Per instruction:
 ///   * 0 < program_id_index < MaxProgramIdIndex
 ///   * all account indices < MaxAccountIndex
-fn sanitize_instructions(
-    view: &UnsanitizedTransactionView<impl TransactionData>,
-    config: &SanitizeConfig,
-) -> Result<()> {
-    // SIMD-160: transaction can not have more than 64 top level instructions
-    if usize::from(view.num_instructions()) > config.max_instructions {
-        return Err(TransactionViewError::SanitizeError);
-    }
-
+fn sanitize_instructions(view: &UnsanitizedTransactionView<impl TransactionData>) -> Result<()> {
     // already verified there is at least one static account.
     let max_program_id_index = view.num_static_account_keys().wrapping_sub(1);
     // verified that there are no more than 256 accounts in `sanitize_account_access`
@@ -175,10 +127,6 @@ fn sanitize_instructions(
             if account_index > max_account_index {
                 return Err(TransactionViewError::SanitizeError);
             }
-        }
-
-        if instruction.accounts.len() > config.max_accounts_per_instruction {
-            return Err(TransactionViewError::SanitizeError);
         }
     }
 
@@ -223,16 +171,6 @@ mod tests {
         solana_system_interface::instruction as system_instruction,
         solana_transaction::versioned::VersionedTransaction,
     };
-
-    // Current protocol values; production callers supply these from agave.
-    fn test_config() -> SanitizeConfig {
-        SanitizeConfig {
-            min_requested_heap_size: 32 * 1024,
-            max_requested_heap_size: 256 * 1024,
-            max_instructions: 64,
-            max_accounts_per_instruction: 255,
-        }
-    }
 
     fn create_legacy_transaction(
         num_signatures: u8,
@@ -308,7 +246,7 @@ mod tests {
         let transaction = multiple_transfers();
         let data = wincode::serialize(&transaction).unwrap();
         let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
-        assert!(view.sanitize(&test_config()).is_ok());
+        assert!(view.sanitize().is_ok());
     }
 
     #[test]
@@ -658,7 +596,7 @@ mod tests {
             );
             let data = wincode::serialize(&transaction).unwrap();
             let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
-            assert!(sanitize_instructions(&view, &test_config()).is_ok());
+            assert!(sanitize_instructions(&view).is_ok());
 
             let transaction = create_v0_transaction(
                 num_signatures,
@@ -669,7 +607,7 @@ mod tests {
             );
             let data = wincode::serialize(&transaction).unwrap();
             let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
-            assert!(sanitize_instructions(&view, &test_config()).is_ok());
+            assert!(sanitize_instructions(&view).is_ok());
         }
 
         for instruction_index in 0..valid_instructions.len() {
@@ -686,7 +624,7 @@ mod tests {
                 let data = wincode::serialize(&transaction).unwrap();
                 let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
                 assert_eq!(
-                    sanitize_instructions(&view, &test_config()),
+                    sanitize_instructions(&view),
                     Err(TransactionViewError::SanitizeError)
                 );
             }
@@ -705,7 +643,7 @@ mod tests {
                 let data = wincode::serialize(&transaction).unwrap();
                 let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
                 assert_eq!(
-                    sanitize_instructions(&view, &test_config()),
+                    sanitize_instructions(&view),
                     Err(TransactionViewError::SanitizeError)
                 );
             }
@@ -723,7 +661,7 @@ mod tests {
                 let data = wincode::serialize(&transaction).unwrap();
                 let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
                 assert_eq!(
-                    sanitize_instructions(&view, &test_config()),
+                    sanitize_instructions(&view),
                     Err(TransactionViewError::SanitizeError)
                 );
             }
@@ -743,7 +681,7 @@ mod tests {
                 let data = wincode::serialize(&transaction).unwrap();
                 let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
                 assert_eq!(
-                    sanitize_instructions(&view, &test_config()),
+                    sanitize_instructions(&view),
                     Err(TransactionViewError::SanitizeError)
                 );
             }
@@ -767,13 +705,13 @@ mod tests {
                 let data = wincode::serialize(&transaction).unwrap();
                 let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
                 assert_eq!(
-                    sanitize_instructions(&view, &test_config()),
+                    sanitize_instructions(&view),
                     Err(TransactionViewError::SanitizeError)
                 );
             }
         }
 
-        // SIMD-0160, too many instructions are invalid
+        // Instruction counts above admission limits are structurally valid.
         {
             let too_many_instructions: Vec<_> = valid_instructions
                 .iter()
@@ -789,10 +727,7 @@ mod tests {
             );
             let data = wincode::serialize(&transaction).unwrap();
             let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
-            assert_eq!(
-                sanitize_instructions(&view, &test_config()),
-                Err(TransactionViewError::SanitizeError)
-            );
+            assert!(view.sanitize().is_ok());
 
             let transaction = create_v0_transaction(
                 num_signatures,
@@ -803,13 +738,10 @@ mod tests {
             );
             let data = wincode::serialize(&transaction).unwrap();
             let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
-            assert_eq!(
-                sanitize_instructions(&view, &test_config()),
-                Err(TransactionViewError::SanitizeError)
-            );
+            assert!(view.sanitize().is_ok());
         }
 
-        // SIMD-406: Limit instruction accounts to 255
+        // Instruction account counts are not admission checked.
         {
             let mut accounts: Vec<u8> = vec![0; 254];
             accounts.push(1);
@@ -823,13 +755,10 @@ mod tests {
             );
             let data = wincode::serialize(&transaction).unwrap();
             let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
-            assert_eq!(
-                sanitize_instructions(&view, &test_config()),
-                Err(TransactionViewError::SanitizeError)
-            );
+            assert!(view.sanitize().is_ok());
         }
 
-        // SIMD-406: Limit instruction accounts to 255
+        // Instruction account counts are not admission checked.
         {
             let mut accounts: Vec<u8> = vec![0; 254];
             accounts.push(1);
@@ -843,7 +772,7 @@ mod tests {
             let data = wincode::serialize(&transaction).unwrap();
             let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
             // Exactly 255 accounts must pass sanitization.
-            assert!(sanitize_instructions(&view, &test_config()).is_ok());
+            assert!(sanitize_instructions(&view).is_ok());
         }
     }
 
@@ -889,129 +818,6 @@ mod tests {
                 sanitize_address_table_lookups(&view),
                 Err(TransactionViewError::SanitizeError)
             );
-        }
-    }
-
-    #[test]
-    fn test_sanitize_config() {
-        // Valid min heap size.
-        {
-            let transaction = create_v1_transaction(
-                1,
-                MessageHeader {
-                    num_required_signatures: 1,
-                    num_readonly_signed_accounts: 0,
-                    num_readonly_unsigned_accounts: 1,
-                },
-                (0..2).map(|_| Pubkey::new_unique()).collect(),
-                vec![],
-                TransactionConfig::empty().with_heap_size(test_config().min_requested_heap_size),
-            );
-            let data = wincode::serialize(&transaction).unwrap();
-            let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
-            assert!(sanitize_config(&view, &test_config()).is_ok());
-        }
-
-        // Valid max heap size.
-        {
-            let transaction = create_v1_transaction(
-                1,
-                MessageHeader {
-                    num_required_signatures: 1,
-                    num_readonly_signed_accounts: 0,
-                    num_readonly_unsigned_accounts: 1,
-                },
-                (0..2).map(|_| Pubkey::new_unique()).collect(),
-                vec![],
-                TransactionConfig::empty().with_heap_size(test_config().max_requested_heap_size),
-            );
-            let data = wincode::serialize(&transaction).unwrap();
-            let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
-            assert!(sanitize_config(&view, &test_config()).is_ok());
-        }
-
-        // Heap size below min.
-        {
-            let transaction = create_v1_transaction(
-                1,
-                MessageHeader {
-                    num_required_signatures: 1,
-                    num_readonly_signed_accounts: 0,
-                    num_readonly_unsigned_accounts: 1,
-                },
-                (0..2).map(|_| Pubkey::new_unique()).collect(),
-                vec![],
-                TransactionConfig::empty()
-                    .with_heap_size(test_config().min_requested_heap_size - 1),
-            );
-            let data = wincode::serialize(&transaction).unwrap();
-            let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
-            assert_eq!(
-                sanitize_config(&view, &test_config()),
-                Err(TransactionViewError::SanitizeError)
-            );
-        }
-
-        // Heap size above max.
-        {
-            let transaction = create_v1_transaction(
-                1,
-                MessageHeader {
-                    num_required_signatures: 1,
-                    num_readonly_signed_accounts: 0,
-                    num_readonly_unsigned_accounts: 1,
-                },
-                (0..2).map(|_| Pubkey::new_unique()).collect(),
-                vec![],
-                TransactionConfig::empty()
-                    .with_heap_size(test_config().max_requested_heap_size + 1),
-            );
-            let data = wincode::serialize(&transaction).unwrap();
-            let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
-            assert_eq!(
-                sanitize_config(&view, &test_config()),
-                Err(TransactionViewError::SanitizeError)
-            );
-        }
-
-        // Heap size not multiple of 1024.
-        {
-            let transaction = create_v1_transaction(
-                1,
-                MessageHeader {
-                    num_required_signatures: 1,
-                    num_readonly_signed_accounts: 0,
-                    num_readonly_unsigned_accounts: 1,
-                },
-                (0..2).map(|_| Pubkey::new_unique()).collect(),
-                vec![],
-                TransactionConfig::empty()
-                    .with_heap_size(test_config().min_requested_heap_size + 1),
-            );
-            let data = wincode::serialize(&transaction).unwrap();
-            let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
-            assert_eq!(
-                sanitize_config(&view, &test_config()),
-                Err(TransactionViewError::SanitizeError)
-            );
-        }
-
-        // Config is not set, default is OK
-        {
-            let transaction = create_v1_transaction(
-                1,
-                MessageHeader {
-                    num_required_signatures: 1,
-                    num_readonly_signed_accounts: 0,
-                    num_readonly_unsigned_accounts: 1,
-                },
-                (0..2).map(|_| Pubkey::new_unique()).collect(),
-                vec![],
-                TransactionConfig::empty(),
-            );
-            let data = wincode::serialize(&transaction).unwrap();
-            let view = TransactionView::try_new_unsanitized(data.as_ref()).unwrap();
-            assert!(sanitize_config(&view, &test_config()).is_ok());
         }
     }
 }
