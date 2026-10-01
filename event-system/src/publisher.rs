@@ -14,6 +14,10 @@ pub struct Publisher<E: Event> {
 }
 
 impl<E: Event> Publisher<E> {
+    /// Publishes an event if the stream is enabled.
+    ///
+    /// Returns an error without publishing the event if the queue is full or
+    /// serialization fails.
     pub fn publish(&mut self, event: &E) -> Result<(), PublishError> {
         self.inner.publish(event)
     }
@@ -21,10 +25,13 @@ impl<E: Event> Publisher<E> {
     /// Publishes the given batch of events on the stream.
     ///
     /// # Errors
-    /// If any event in the batch fails to send, [`PublishError`] is returned
-    /// and the remaining events in the batch are dropped.
+    /// If the whole batch does not fit in the queue, [`PublishError::FailedToSend`]
+    /// is returned without publishing any events. If serialization fails,
+    /// [`PublishError::Serialization`] is returned after publishing only the
+    /// successfully serialized prefix. The failing event and remaining suffix
+    /// are not published.
     ///
-    /// The events previous to the failing event are all sent.
+    /// A panic during serialization cancels the entire batch.
     pub fn publish_batch(&mut self, events: &[E]) -> Result<(), PublishError> {
         self.inner.publish_batch(events)
     }

@@ -1,6 +1,6 @@
 # Variable-sized shared-memory payload support
 
-Status: shaq prerequisites integrated; event-system payload implementation pending.
+Status: shaq prerequisites and prepared publication integrated; shared payloads pending.
 Inspection baseline: agave-event-system in this worktree, locked shaq 4.4.0,
 and wincode-dynamic 0.3.0. Recheck the target shaq checkout before implementation.
 
@@ -31,10 +31,18 @@ Clippy with warnings denied, and the event-system test suite in a temporary
 integration checkout before being applied to the local branch. This is not an
 exhaustive memory-model review of the prerequisite implementation.
 
-Next event-system work: adopt explicit prepared publication and then introduce
-the outer stream layout. Managed consumer ownership/monitoring and the payload
-allocator remain outstanding. The descriptions below record the original
-inspection baseline and proposed implementation, not completed work.
+Event-system publication now uses prepared writes and explicit commit. Single
+serialization failures publish nothing; batch serialization errors commit only
+the successful prefix. Unwinding cancels the entire preparation. Capacity is
+checked before serialization and disabled streams still return before preparing.
+Eleven regression cases cover failure positions, wraparound, capacity reuse,
+held-cell backpressure, disabled streams, and panic cancellation. The full
+event-system test suite and Clippy pass.
+
+Next event-system work: introduce the outer stream layout. Managed consumer
+ownership/monitoring and the payload allocator remain outstanding. The
+descriptions below record the original inspection baseline and proposed design;
+refer to this status section for completed work.
 
 ## Goal and constraints
 

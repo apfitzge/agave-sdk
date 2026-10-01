@@ -20,17 +20,20 @@ impl<E: Event> Publisher<E> {
             return Ok(());
         }
 
-        // SAFETY: write_guard is initialized below before it is dropped by going out of scope.
-        let mut write_guard = unsafe { self.broadcast_sender.try_reserve_write() }
+        let mut prepared = self
+            .broadcast_sender
+            .try_prepare_write()
             .ok_or(PublishError::FailedToSend)?;
 
-        let write_guard_cell = write_guard.as_mut();
-        // SAFETY: the inner cell contains [u8; N] which is valid for every bit pattern.
-        let cell = unsafe { write_guard_cell.assume_init_mut() };
+        // SAFETY: the memfd starts zero-filled, and serialization only writes initialized
+        // bytes. Event::QueueCell is valid for every bit pattern and has no padding.
+        let cell = unsafe { prepared.as_mut().assume_init_mut() };
 
-        // if serialization fails we still send incomplete bytes, as drop implementation of
-        // write_guard does the sending.
         wincode::serialize_into(cell.as_mut(), &event).map_err(PublishError::Serialization)?;
+
+        // SAFETY: serialization succeeded, and the entire cell remains initialized,
+        // including any unused bytes after the encoded event.
+        unsafe { prepared.commit_initialized() };
 
         Ok(())
     }
@@ -38,10 +41,8 @@ impl<E: Event> Publisher<E> {
     /// Publishes the given batch of events.
     ///
     /// # Errors
-    /// If any event in the batch fails to send, [`PublishError`] is returned
-    /// and the remaining events in the batch are dropped.
-    ///
-    /// The events previous to the failing event are all sent.
+    /// If the whole batch does not fit, no events are sent. If serialization
+    /// fails, only the successfully serialized prefix is sent.
     pub(crate) fn publish_batch(&mut self, events: &[E]) -> Result<(), PublishError> {
         if !self.stream_rule.is_on() {
             return Ok(());
@@ -51,20 +52,27 @@ impl<E: Event> Publisher<E> {
             // nothing to write
             return Ok(());
         };
-        // SAFETY: write_guard cells are initialized in the loop below before it is dropped by going out of scope.
-        let mut write_guard = unsafe { self.broadcast_sender.try_reserve_write_batch(event_count) }
+        let mut prepared = self
+            .broadcast_sender
+            .try_prepare_write_batch(event_count)
             .ok_or(PublishError::FailedToSend)?;
 
         for (i, event) in events.iter().enumerate() {
-            // SAFETY: i < events.len() which is the batch size
-            let write_guard_cell = unsafe { write_guard.as_mut(i) };
-            // SAFETY: the inner cell contains [u8; N] which is valid for every bit pattern.
-            let cell = unsafe { write_guard_cell.assume_init_mut() };
+            // SAFETY: the memfd starts zero-filled, and serialization only writes initialized
+            // bytes. Event::QueueCell is valid for every bit pattern and has no padding.
+            let cell = unsafe { prepared.as_mut(i).assume_init_mut() };
 
-            // if serialization fails we still send incomplete bytes, as drop implementation of
-            // write_guard does the sending.
-            wincode::serialize_into(cell.as_mut(), &event).map_err(PublishError::Serialization)?;
+            if let Err(error) = wincode::serialize_into(cell.as_mut(), &event) {
+                // SAFETY: cells before i contain successfully serialized events with
+                // fully initialized bytes. The failed cell and suffix are not published.
+                unsafe { prepared.commit_prefix(i) };
+                return Err(PublishError::Serialization(error));
+            }
         }
+
+        // SAFETY: every cell contains a successfully serialized event and all bytes,
+        // including unused trailing bytes, remain initialized.
+        unsafe { prepared.commit() };
 
         Ok(())
     }
