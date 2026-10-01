@@ -3,17 +3,16 @@
 ## Implementation status
 
 The three changes below are present in
-`/home/apfitzge/dev/shaq/worktrees/variable-sized-payload-broadcast`, at commits
-`d89de6f`, `cc26222`, and `7ec9fdf`, respectively. Do not reimplement them blindly.
+`/home/apfitzge/dev/shaq/worktrees/variable-sized-payload-broadcast`. Their original
+commits were `d89de6f`, `cc26222`, and `7ec9fdf`; the user has since updated the
+branch to the 4.4.0 baseline and added `create_at_with_identifier`. Do not
+reimplement these prerequisites blindly.
 
-The checkout has since been reconciled with the local 4.4.0 baseline (`ad2c217`)
-to restore queue identifiers and producer/lane metadata. Those compatibility
-changes are uncommitted; prerequisite commit history is preserved. The workspace
-uses the checkout as a path dependency. `create_at_with_identifier` now covers
-identified queues at nonzero offsets. The resolved source passed 168 unit tests,
-7 doctests, Clippy, and downstream event-system tests before application. The
-original implementation brief follows for reference and validation; this testing
-does not replace a full concurrency/safety review.
+The workspace uses this checkout as a path dependency. This is a historical
+handoff for the queue prerequisites, not authorization for further shaq changes.
+The current downstream scope is an allocator PoC. Process monitoring, consumer
+registries, and crash recovery are out of scope. Leave shaq unchanged.
+
 
 ## Task
 
