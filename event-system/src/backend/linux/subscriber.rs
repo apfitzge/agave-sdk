@@ -1,5 +1,8 @@
 use {
-    super::{QUEUE_FILE_NAME_PREFIX, REQUIRED_SEALS, SCHEMA_FILE_NAME, STREAMS_DIRECTORY_NAME},
+    super::{
+        QUEUE_FILE_NAME_PREFIX, REQUIRED_SEALS, SCHEMA_FILE_NAME, STREAMS_DIRECTORY_NAME,
+        stream_layout::StreamLayout,
+    },
     crate::{
         stream_name::{StreamName, StreamNameValidationError},
         subscriber::{RecvTimeoutError, TryConnectError, TryRecvError},
@@ -249,11 +252,26 @@ fn open_queue(
         return Err(CreateAvailableStreamError::QueueIsNotSealed);
     }
 
+    let stream_layout = StreamLayout::read(&queue_file)?;
+    if expected_broadcast_identifier != stream_layout.identifier {
+        return Err(CreateAvailableStreamError::QueueIdentifierMismatch {
+            expected: expected_broadcast_identifier,
+            actual: stream_layout.identifier,
+        });
+    }
+
     // SAFETY:
-    // - file is a live broadcast queue, and checked above to be sealed against resizing.
+    // - file contains a live broadcast queue in the validated region, and was
+    //   checked above to be sealed against resizing.
     // - the payload, Event::QueueCell guarantees fully byte initialization.
     // - Event::QueueCell can always be decoded as bytes.
-    let broadcast_handle = unsafe { Broadcast::join_untyped(&queue_file) }?;
+    let broadcast_handle = unsafe {
+        Broadcast::join_untyped_at(
+            &queue_file,
+            stream_layout.queue_offset,
+            stream_layout.queue_len,
+        )
+    }?;
 
     let actual_broadcast_identifier = broadcast_handle.queue_identifier();
 
@@ -317,7 +335,7 @@ mod tests {
     use {
         super::{
             CreateAvailableStreamError, Dir, Mode, OFlag, QUEUE_FILE_NAME_PREFIX, REQUIRED_SEALS,
-            STREAMS_DIRECTORY_NAME, open_queue,
+            STREAMS_DIRECTORY_NAME, StreamLayout, open_queue,
         },
         crate::{EventSystem, PublisherFactory, StreamConfig, event, stream_name},
         nix::{
@@ -327,7 +345,7 @@ mod tests {
         rstest::rstest,
         std::{
             assert_matches,
-            fs::File,
+            fs::{File, OpenOptions},
             os::{fd::AsRawFd, unix::fs::symlink},
             path::PathBuf,
         },
@@ -432,6 +450,46 @@ mod tests {
             Err(CreateAvailableStreamError::QueueIdentifierMismatch { expected, actual })
                 if expected == published_identifier && actual == actual_identifier
         );
+    }
+
+    #[rstest]
+    #[case::identifier_mismatch(true)]
+    #[case::truncated_region(false)]
+    fn open_queue_validates_inner_queue_against_outer_header(#[case] change_identifier: bool) {
+        let stream = TestStream::new();
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&stream.queue_path)
+            .unwrap();
+        let mut layout = StreamLayout::read(&file).unwrap();
+        let original_identifier = layout.identifier;
+        if change_identifier {
+            layout.identifier ^= 1;
+            // The name and outer header agree, but the embedded queue does not.
+            std::fs::rename(
+                &stream.queue_path,
+                stream.path.join(format!("queue-{}", layout.identifier)),
+            )
+            .unwrap();
+        } else {
+            // The file still contains a complete queue, but its advertised region does not.
+            layout.queue_len = 1;
+        }
+        layout.write(&file).unwrap();
+        let result = open_queue(&mut stream.open_directory());
+        if change_identifier {
+            assert_matches!(
+                result,
+                Err(CreateAvailableStreamError::QueueIdentifierMismatch { expected, actual })
+                    if expected == layout.identifier && actual == original_identifier
+            );
+        } else {
+            assert_matches!(
+                result,
+                Err(CreateAvailableStreamError::JoiningBroadcastFailed(_))
+            );
+        }
     }
 
     #[rstest]

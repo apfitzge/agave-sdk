@@ -19,6 +19,7 @@ use {
         path::{Path, PathBuf},
         sync::{Arc, Mutex},
     },
+    stream_layout::StreamLayout,
     stream_policy::{AtomicStreamRule, StreamPolicyManager},
 };
 pub(crate) use {
@@ -28,6 +29,8 @@ pub(crate) use {
 
 #[path = "linux/publisher.rs"]
 mod publisher;
+#[path = "linux/stream_layout.rs"]
+mod stream_layout;
 #[path = "linux/stream_policy.rs"]
 mod stream_policy;
 #[path = "linux/subscriber.rs"]
@@ -158,7 +161,7 @@ impl EventSystem {
     }
 }
 
-/// Creates a queue backed by a sealed file.
+/// Creates a stream header and queue backed by a sealed file.
 /// Returns both the [`Broadcast`] and its backing [`File`].
 fn create_sealed_queue<E: Event>(
     stream_config: StreamConfig,
@@ -169,6 +172,10 @@ fn create_sealed_queue<E: Event>(
         producer_slots: stream_config.publisher_slots,
         consumer_slots: stream_config.subscriber_slots,
     };
+    let queue_layout = broadcast_config
+        .layout::<E::QueueCell>()
+        .map_err(|error| CreateStreamError::Queue(PublicEventQueueError(error)))?;
+    let stream_layout = StreamLayout::new(queue_layout, queue_identifier)?;
 
     let check_libc_result = |result: i32| {
         if result == -1 {
@@ -189,16 +196,26 @@ fn create_sealed_queue<E: Event>(
 
     // SAFETY: memfd_create returned a new owned file descriptor.
     let queue_file = unsafe { File::from_raw_fd(queue_fd) };
+    queue_file.set_len(stream_layout.file_len)?;
 
     // SAFETY:
-    // - memfd_create returned a new anonymous file, so this call uniquely
-    //   initializes it.
+    // - memfd_create returned a new file, sized above to contain the header and
+    //   nonoverlapping aligned queue region, which is uniquely initialized here.
     // - the file is sealed against resizing below.
     // - E::QueueCell guarantees Broadcast::create's T type requirements.
     let broadcast = unsafe {
-        Broadcast::create_with_identifier(&queue_file, broadcast_config, queue_identifier)
+        Broadcast::create_at_with_identifier(
+            &queue_file,
+            stream_layout.queue_offset,
+            stream_layout.queue_len,
+            broadcast_config,
+            queue_identifier,
+        )
     }
     .map_err(|error| CreateStreamError::Queue(PublicEventQueueError(error)))?;
+
+    // The immutable header is written last, before sealing and directory publication.
+    stream_layout.write(&queue_file)?;
 
     // SAFETY: queue_file owns a valid descriptor and F_ADD_SEALS accepts this bitmask.
     let seal_result = unsafe { libc::fcntl(queue_fd, libc::F_ADD_SEALS, REQUIRED_SEALS) };
@@ -318,8 +335,9 @@ impl Drop for StagingDirectory {
 #[cfg(test)]
 mod tests {
     use {
-        super::{REQUIRED_SEALS, StagingDirectory, create_sealed_queue},
+        super::{REQUIRED_SEALS, StagingDirectory, StreamLayout, create_sealed_queue},
         crate::{StreamConfig, event},
+        shaq::broadcast::{Broadcast, ProducerId},
         std::{io, os::fd::AsRawFd},
         tempfile::TempDir,
     };
@@ -359,6 +377,46 @@ mod tests {
         std::fs::write(staging.path().join("file"), b"unpublished contents").unwrap();
         drop(staging);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn relocated_queue_preserves_header_and_supports_typed_and_untyped_joins() {
+        let (broadcast, file) = create_sealed_queue::<TestEvent>(
+            StreamConfig {
+                subscriber_slots: 2,
+                ..TEST_CONFIG
+            },
+            123,
+        )
+        .unwrap();
+        let layout = StreamLayout::read(&file).unwrap();
+        assert!(layout.queue_offset > 0);
+        assert_eq!(layout.identifier, 123);
+        assert_eq!(layout.file_len, file.metadata().unwrap().len());
+
+        // SAFETY: this is the sealed queue just initialized for TestEvent's byte-array cell.
+        let typed =
+            unsafe { Broadcast::<[u8; 8]>::join_at(&file, layout.queue_offset, layout.queue_len) }
+                .unwrap();
+        // SAFETY: same live queue; all bytes are initialized.
+        let untyped =
+            unsafe { Broadcast::join_untyped_at(&file, layout.queue_offset, layout.queue_len) }
+                .unwrap();
+        assert_eq!(typed.queue_identifier(), 123);
+        assert_eq!(untyped.queue_identifier(), 123);
+        let mut typed_consumer = typed.consumer().unwrap();
+        // SAFETY: TestEvent's cell is a fully initialized byte array without padding.
+        let mut slice_consumer = unsafe { untyped.slice_consumer() }.unwrap();
+        let mut producer = broadcast.producer(ProducerId::new(456)).unwrap();
+        producer
+            .try_prepare_write()
+            .unwrap()
+            .commit(42u64.to_le_bytes());
+        assert_eq!(typed_consumer.try_read().unwrap(), 42u64.to_le_bytes());
+        let held = slice_consumer.try_read().unwrap();
+        assert_eq!(held.as_slice(), 42u64.to_le_bytes());
+        assert_eq!(held.lane_metadata().producer_id().get(), 456);
+        assert_eq!(StreamLayout::read(&file).unwrap(), layout);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 # Variable-sized shared-memory payload support
 
-Status: shaq prerequisites and prepared publication integrated; shared payloads pending.
+Status: shaq prerequisites, prepared publication, and outer stream layout integrated;
+consumer monitoring and shared payloads pending.
 Inspection baseline: agave-event-system in this worktree, locked shaq 4.4.0,
 and wincode-dynamic 0.3.0. Recheck the target shaq checkout before implementation.
 
@@ -39,10 +40,29 @@ Eleven regression cases cover failure positions, wraparound, capacity reuse,
 held-cell backpressure, disabled streams, and panic cancellation. The full
 event-system test suite and Clippy pass.
 
-Next event-system work: introduce the outer stream layout. Managed consumer
-ownership/monitoring and the payload allocator remain outstanding. The
-descriptions below record the original inspection baseline and proposed design;
-refer to this status section for completed work.
+The stream file now has an immutable 128-byte version-1 header and a page-aligned
+broadcast region at a nonzero offset. The little-endian header records total
+length, stream identifier, queue offset/length, shaq format version, native queue
+ABI, and reserved zero words for future extensions. Creation sizes the enclosing
+file once, initializes the queue using `create_at_with_identifier`, writes the
+header, seals the file, and then publishes the directory. Subscribers check the
+header and filename identifier before joining the bounded region, then verify
+the embedded queue identifier. Legacy raw-queue files and unsupported extensions
+are rejected. Existing event encodings and public creation APIs are unchanged.
+
+The header is read through positional file IO rather than shared references.
+Because it is immutable and completed before directory publication, it needs no
+additional readiness atomic; the queue retains shaq's own publication ordering.
+Registry/payload descriptors will require an explicit format extension rather
+than allowing version-1 readers to ignore their semantics. Twenty-one new cases
+cover encoding, malformed/truncated/overflowing layouts, ABI/version rejection,
+identifier consistency, and typed/untyped relocated joins. Event-system tests,
+Clippy, and formatting pass.
+
+Next work: managed consumer ownership and registry/monitoring, followed by the
+payload allocator and typed payload integration. The descriptions below record
+the original inspection baseline and proposed design; refer to this status
+section for completed work.
 
 ## Goal and constraints
 
