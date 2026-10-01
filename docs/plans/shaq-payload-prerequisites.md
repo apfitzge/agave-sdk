@@ -6,12 +6,14 @@ The three changes below are present in
 `/home/apfitzge/dev/shaq/worktrees/variable-sized-payload-broadcast`, at commits
 `d89de6f`, `cc26222`, and `7ec9fdf`, respectively. Do not reimplement them blindly.
 
-Integration prerequisite: this checkout declares shaq `3.0.0` and lacks the
-4.4.0 queue-identifier and producer/lane-metadata APIs required by event-system.
-Port/rebase these changes onto the compatible baseline before using it as the
-event-system dependency. Their presence was source-inspected, not fully reviewed
-or retested in this event-system session. The original implementation brief
-follows for reference and validation.
+The checkout has since been reconciled with the local 4.4.0 baseline (`ad2c217`)
+to restore queue identifiers and producer/lane metadata. Those compatibility
+changes are uncommitted; prerequisite commit history is preserved. The workspace
+uses the checkout as a path dependency. `create_at_with_identifier` now covers
+identified queues at nonzero offsets. The resolved source passed 168 unit tests,
+7 doctests, Clippy, and downstream event-system tests before application. The
+original implementation brief follows for reference and validation; this testing
+does not replace a full concurrency/safety review.
 
 ## Task
 

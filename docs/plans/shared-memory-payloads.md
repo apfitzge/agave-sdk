@@ -1,6 +1,6 @@
 # Variable-sized shared-memory payload support
 
-Status: implementation plan; no implementation performed.
+Status: shaq prerequisites integrated; event-system payload implementation pending.
 Inspection baseline: agave-event-system in this worktree, locked shaq 4.4.0,
 and wincode-dynamic 0.3.0. Recheck the target shaq checkout before implementation.
 
@@ -17,17 +17,24 @@ The prerequisites are implemented in the local checkout
 - `cc26222`: cancellable prepared writes and explicit/prefix commit.
 - `7ec9fdf`: synchronized reclamation watermarks and prepared sequence identity.
 
-Source inspection confirmed these APIs and accompanying test modules are present;
-tests were not rerun as part of this status update. This is not a full correctness
-review of the prerequisite implementation.
+The workspace now uses this checkout as a path dependency. Its original 3.0.0
+baseline was reconciled with the locally available 4.4.0 baseline (`ad2c217`),
+restoring `ProducerId`, `LaneMetadata`, identifiers, and Debug implementations
+while preserving the prerequisite commits. The compatibility changes are
+uncommitted in the shaq worktree; no history was rewritten.
 
-Before wiring this checkout into event-system, resolve its baseline mismatch:
-it declares package version `3.0.0`, while this workspace requires `4.4.0`, and
-does not contain the `ProducerId`, `LaneMetadata`, queue-identifier, or lane
-metadata APIs used here. A plain Cargo patch is therefore insufficient. Prefer
-porting/rebasing the prerequisite commits onto the compatible 4.4.0 API baseline,
-preserving identifiers and publisher metadata, then testing integration. The
-event-system dependency has not been changed.
+The integration also adds `Broadcast::create_at_with_identifier`, preserving
+queue identifiers when using bounded regions. A regression test combines
+relocated typed/untyped joins, identifiers, prepared publication, lane metadata,
+and reclamation. The resolved source passed 168 shaq unit tests, 7 doctests,
+Clippy with warnings denied, and the event-system test suite in a temporary
+integration checkout before being applied to the local branch. This is not an
+exhaustive memory-model review of the prerequisite implementation.
+
+Next event-system work: adopt explicit prepared publication and then introduce
+the outer stream layout. Managed consumer ownership/monitoring and the payload
+allocator remain outstanding. The descriptions below record the original
+inspection baseline and proposed implementation, not completed work.
 
 ## Goal and constraints
 
