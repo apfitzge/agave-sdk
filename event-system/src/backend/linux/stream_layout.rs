@@ -95,7 +95,6 @@ impl StreamLayout {
 
     /// File offset and usable byte length for one lane. Mapping/copying follows
     /// in the publication integration; padding is never part of an allocation.
-    #[allow(dead_code)]
     pub(super) fn payload_region(&self, lane: usize) -> Option<(u64, u64)> {
         let lane = u64::try_from(lane).ok()?;
         if lane >= self.payload_lanes {

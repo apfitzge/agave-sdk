@@ -29,8 +29,12 @@ The standalone offset allocator is implemented in
 `backend/linux/payload_ring.rs`: contiguous byte ranges, wrap-padding accounting,
 cancellable reservations, checked logical positions, and explicit FIFO-prefix
 reclamation. Its state is entirely producer-local; it does not map or copy bytes.
-Payload mappings/copying, broadcast bookkeeping, and typed access remain to be
-integrated. Seven unit tests cover the allocator's boundary and failure cases.
+`backend/linux/payload_storage.rs` now owns writable producer or read-only
+consumer mappings of the payload region. It checks file seals and lane bounds,
+excludes page padding, and provides internal unsafe copy/borrow operations whose
+caller must prove allocation ownership and lifetime. Separate-mapping tests cover
+10 MiB payloads, lane isolation, descriptor lifetime, invalid handles, and disabled
+storage. Broadcast bookkeeping and safe typed access remain to be integrated. Seven unit tests cover the allocator's boundary and failure cases.
 
 ## Allocator
 

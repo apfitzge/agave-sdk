@@ -33,6 +33,10 @@ mod publisher;
 #[allow(dead_code)]
 #[path = "linux/payload_ring.rs"]
 mod payload_ring;
+// Mapping layer is wired into publication in the next PoC step.
+#[allow(dead_code)]
+#[path = "linux/payload_storage.rs"]
+mod payload_storage;
 #[path = "linux/stream_layout.rs"]
 mod stream_layout;
 #[path = "linux/stream_policy.rs"]
