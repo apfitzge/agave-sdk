@@ -104,11 +104,58 @@ numeric metadata, source-buffer independence, repeated zero-copy decoding, and
 rejection of unsupported payload batches. Compile-fail docs
 check payload-borrow lifetime and invalid marker declarations.
 
-The allocator PoC is connected end to end. Next work is measurement: compare
-fixed-size events and payload sizes through 10 MiB, and exercise representative
-account-update/transaction metadata. Account-db integration and a general-purpose
+The allocator PoC is connected end to end. The continuous example below exercises
+multiple publishers and consumers with variable-sized payloads. Account-db integration and a general-purpose
 allocator remain separate projects. Crash recovery remains out of scope.
 
 Marker regression coverage includes dynamic handle positions, named and tuple
 enum variants, payload-free variants, custom enum tag encoding, and mismatched
 producer/consumer marker declarations.
+
+
+## Continuous multithreaded example
+
+```sh
+cargo run --release -p agave-event-system --example payloads
+# Optional positional arguments: producers consumers max-payload-bytes seconds [validate|metadata]
+cargo run --release -p agave-event-system --example payloads -- 4 2 10485760
+# Two publishers, no consumers:
+cargo run --release -p agave-event-system --example payloads -- 2 0
+# Two publishers and two consumers that decode but do not scan payload bytes:
+cargo run --release -p agave-event-system --example payloads -- 2 2 65536 0 metadata
+```
+
+Defaults are two publisher threads, two typed consumer threads, payloads up to
+64 KiB, and continuous execution. Stop with Ctrl-C, or supply a nonzero duration
+in seconds. Consumer mode defaults to `validate`. The `metadata` mode still
+uses typed decoding (including handle resolution) and checks sequence ordering,
+but never reads the borrowed payload bytes. Source filling, publication, counters,
+and yielding behavior are identical in both modes. The temporary stream directory
+is printed and removed on shutdown.
+
+Each publisher has its own lane and payload ring, cycles through payload sizes
+from one byte to the configured maximum (up to 10 MiB), and publishes borrowed
+slices. All consumers attach before publication starts. Each independently reads
+the broadcast, checks increasing per-producer sequence numbers (gaps are allowed
+for drops), and verifies every payload byte while holding its cell. Publishers
+continue after queue or payload exhaustion, counting the dropped events.
+
+Once per second the example reports successful publications, payload MiB/s,
+per-consumer event rates, and separate queue/payload drop counts. These are live
+activity counters, not benchmark results; source filling, full payload validation,
+thread scheduling, and reporting all contribute to the workload.
+
+A local release-build comparison with 2 publishers, 2 consumers, and a 64 KiB
+maximum used three five-second runs per mode, excluding each run's first report:
+
+| Consumer mode | Published events/s | Published MiB/s | Queue drops/s | Payload drops/s |
+| --- | ---: | ---: | ---: | ---: |
+| Full validation | 2.22 million | 2,111 | 422,461 | 819,695 |
+| Metadata only | 2.81 million | 38,033 | 0 | 85 |
+
+Only the payload scan was disabled. The successful event mix also changed:
+average published payload size rose from about 1,000 to 14,186 bytes. This is
+consistent with larger allocations being dropped disproportionately under
+validation-induced backpressure; the 18x byte-rate increase is not an 18x
+increase in event rate. These short local runs are workload observations, not
+portable performance guarantees.
