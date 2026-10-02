@@ -160,7 +160,6 @@ impl EventSystem {
             stream_name: Arc::new(stream_name),
             _queue_file: queue_file,
             payload_storage,
-            schema,
             payload_capacity,
             queue_capacity: stream_config.capacity,
         });
@@ -321,7 +320,6 @@ struct StreamGuard {
     // keeps the anonymous file alive
     _queue_file: File,
     payload_storage: Option<payload_storage::PayloadStorage>,
-    schema: crate::payload::StreamSchema,
     payload_capacity: u64,
     queue_capacity: usize,
 }

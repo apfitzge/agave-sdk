@@ -58,8 +58,11 @@ The macro generates an internal wire type with ordinary `data_offset: u64` and
 consumers see only those numeric fields: they have no payload accessor or raw
 handle-resolution API. The public PayloadHandle and publish_with_payload APIs
 are removed. Fixed-size events retain their existing representations and derives.
-Payload events derive header serialization, with an adapter writing placeholder
-integers, and use guard-aware decoding instead of ordinary SchemaRead.
+Payload events use a generated wire writer that borrows metadata and writes the
+allocated offset/length directly, including configured field adapters and enum
+tags. Publication performs no runtime schema traversal or handle patching.
+Standalone SchemaWrite still emits empty handle placeholders; guard-aware
+decoding replaces ordinary SchemaRead for payload events.
 
 Structs, tuple structs, and named/tuple enum variants remain supported, with at
 most one payload per struct or variant. Tuple payloads expand into two numeric
@@ -76,15 +79,15 @@ it was previously inferred solely from a subsequent publication. Generic callers
 that pass E directly can use `for<'a> Event<View<'a> = E>` for fixed-size events.
 
 Generated marker metadata identifies the offset field by variant and name.
-The producer persists that metadata with the schema. Both sides locate the two
-integers through the schema decoder, including dynamic metadata prefixes and
-configured enum tags. Resolution always follows the producer's markers and the
+The producer persists that metadata with the schema. Consumer-side resolution
+locates the two integers through the schema decoder, including dynamic metadata
+prefixes and configured enum tags. Resolution follows the producer's markers and the
 held cell's producer lane; a reader cannot redirect it using its own markers.
 
 `EventSystem::create_stream_with_payloads` adds a nonzero byte capacity per
 producer, without changing StreamConfig. Normal `publish` checks enablement,
 prepares a broadcast cell, reclaims eligible allocations, reserves bytes,
-serializes metadata, fills the handle, copies the source slice, records ownership,
+serializes metadata and the allocated handle, copies the source slice, records ownership,
 and publishes. Serialization errors/panics cancel both reservations. No fallible
 work or bookkeeping allocation follows the allocator commit. Disabled streams
 return before allocation, copying, or serialization.

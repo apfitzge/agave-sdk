@@ -32,6 +32,27 @@ unsafe impl<'a, C: wincode::config::ConfigCore> SchemaWrite<C> for PayloadSlice<
     }
 }
 
+/// Forward a field schema to borrowed metadata in the generated wire writer.
+#[doc(hidden)]
+pub struct BorrowedSchema<'a, S: ?Sized>(std::marker::PhantomData<&'a S>);
+
+// SAFETY: size and writes delegate to S with the same source value. References
+// are not wire bytes, so TYPE_META retains its non-zero-copy default.
+unsafe impl<'a, C, S> SchemaWrite<C> for BorrowedSchema<'a, S>
+where
+    C: wincode::config::ConfigCore,
+    S: SchemaWrite<C> + ?Sized,
+    S::Src: 'a,
+{
+    type Src = &'a S::Src;
+    fn size_of(src: &Self::Src) -> wincode::WriteResult<usize> {
+        S::size_of(*src)
+    }
+    fn write(writer: impl wincode::io::Writer, src: &Self::Src) -> wincode::WriteResult<()> {
+        S::write(writer, *src)
+    }
+}
+
 /// Persist the producer's markers alongside its ordinary event schema. A typed
 /// consumer's choice of Rust type cannot redirect access to an unmarked field.
 #[cfg(target_os = "linux")]

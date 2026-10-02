@@ -46,11 +46,16 @@ fn event_impl(
     wire.vis = syn::Visibility::Inherited;
     wire.generics = syn::Generics::default();
     wire.attrs.retain(|attr| attr.path().is_ident("wincode"));
+    let writer_ident = format_ident!("{}Writer", wire_ident);
+    let mut writer = wire.clone();
+    writer.ident = writer_ident.clone();
+    writer.generics = syn::parse_quote!(<'__event_write>);
+    let mut write_arms = Vec::new();
     let mut descriptors = Vec::new();
     let mut payload_arms = Vec::new();
     let mut decode_arms = Vec::new();
-    match (&mut input.data, &mut wire.data) {
-        (syn::Data::Struct(data), syn::Data::Struct(wire)) => {
+    match (&mut input.data, &mut wire.data, &mut writer.data) {
+        (syn::Data::Struct(data), syn::Data::Struct(wire), syn::Data::Struct(writer)) => {
             let generated = payload_fields(
                 &mut data.fields,
                 &mut wire.fields,
@@ -59,12 +64,19 @@ fn event_impl(
                 &wire_ident,
                 &krate,
             )?;
+            writer.fields = generated.write_fields;
+            write_arms.push(generated.write);
             descriptors.extend(generated.descriptor);
             payload_arms.push(generated.payload);
             decode_arms.push(generated.decode);
         }
-        (syn::Data::Enum(data), syn::Data::Enum(wire)) => {
-            for (variant, wire) in data.variants.iter_mut().zip(&mut wire.variants) {
+        (syn::Data::Enum(data), syn::Data::Enum(wire), syn::Data::Enum(writer)) => {
+            for ((variant, wire), writer) in data
+                .variants
+                .iter_mut()
+                .zip(&mut wire.variants)
+                .zip(&mut writer.variants)
+            {
                 let generated = payload_fields(
                     &mut variant.fields,
                     &mut wire.fields,
@@ -81,6 +93,9 @@ fn event_impl(
                 if let Some(descriptor) = generated.descriptor {
                     descriptors.push(quote!(#(#cfg)* #descriptor));
                 }
+                writer.fields = generated.write_fields;
+                let write = generated.write;
+                write_arms.push(quote!(#(#cfg)* #write));
                 let payload = generated.payload;
                 let decode = generated.decode;
                 payload_arms.push(quote!(#(#cfg)* #payload));
@@ -114,6 +129,10 @@ fn event_impl(
                     #krate::wincode_dynamic::SchemaDynamic)]
                 #[wincode(crate = #macro_path)]
                 #wire
+                // Borrow metadata rather than cloning it to construct the wire writer.
+                #[derive(#krate::wincode::SchemaWrite)]
+                #[wincode(crate = #macro_path)]
+                #writer
                 impl #impl_generics #krate::wincode_dynamic::SchemaDynamic for #ident #type_generics #where_clause {
                     const SERIALIZED_SIZE: #krate::wincode_dynamic::SerializedSize =
                         <#wire_ident as #krate::wincode_dynamic::SchemaDynamic>::SERIALIZED_SIZE;
@@ -134,6 +153,11 @@ fn event_impl(
                 const HAS_PAYLOAD: bool = !Self::PAYLOAD_FIELDS.is_empty();
                 const PAYLOAD_FIELDS: &'static [(Option<&'static str>, &'static str)] = &[#(#descriptors),*];
                 fn payload_data(&self) -> Option<&[u8]> { match self { #(#payload_arms),* } }
+                fn write_event(&self, cell: &mut [u8], __event_handle: [u64; 2])
+                    -> #krate::wincode::WriteResult<()> {
+                    let wire = match self { #(#write_arms),* };
+                    #krate::wincode::serialize_into(cell, &wire)
+                }
                 fn decode_event<'__event_view>(header: &[u8], __event_payload: &'__event_view [u8])
                     -> #krate::wincode::ReadResult<Self::View<'__event_view>> {
                     let wire: #wire_ident = #krate::wincode::deserialize(header)?;
@@ -187,6 +211,8 @@ struct PayloadFields {
     descriptor: Option<proc_macro2::TokenStream>,
     payload: proc_macro2::TokenStream,
     decode: proc_macro2::TokenStream,
+    write: proc_macro2::TokenStream,
+    write_fields: syn::Fields,
 }
 
 fn payload_fields(
@@ -197,6 +223,11 @@ fn payload_fields(
     wire_ident: &syn::Ident,
     krate: &proc_macro2::TokenStream,
 ) -> syn::Result<PayloadFields> {
+    let writer_ident = format_ident!("{}Writer", wire_ident);
+    let mut write_fields = fields.clone();
+    let mut borrowed_fields = syn::punctuated::Punctuated::new();
+    let mut write_bindings = Vec::new();
+    let mut write_values = Vec::new();
     let mut marked = None;
     let original_names: Vec<_> = fields.iter().filter_map(|f| f.ident.clone()).collect();
     let mut wire_fields = syn::punctuated::Punctuated::new();
@@ -213,6 +244,9 @@ fn payload_fields(
         let binding = format_ident!("__field_{}", index);
         let member = field.ident.as_ref().map(|name| quote!(#name:));
         if markers.is_empty() {
+            borrowed_fields.push(borrowed_field(field, krate)?);
+            write_bindings.push(quote!(#member #binding));
+            write_values.push(quote!(#member #binding));
             wire_fields.push(field.clone());
             read_bindings.push(quote!(#member #binding));
             values.push(quote!(#member #binding));
@@ -245,6 +279,12 @@ fn payload_fields(
                 "#[payload] requires an immutable &'a [u8]",
             ));
         }
+        let mut handle_field = field.clone();
+        handle_field.attrs.retain(|a| !a.path().is_ident("payload"));
+        handle_field.ty = syn::parse_quote!(&'__event_write [u64; 2]);
+        borrowed_fields.push(handle_field);
+        write_bindings.push(quote!(#member _));
+        write_values.push(quote!(#member &__event_handle));
         let lifetime = &reference.lifetime;
         let adapter = LitStr::new(
             &quote!(#krate::__private::PayloadSlice<#lifetime>).to_string(),
@@ -309,12 +349,20 @@ fn payload_fields(
         syn::Fields::Unnamed(_) => quote!(#path(#(#parts),*)),
         syn::Fields::Unit => quote!(#path),
     };
+    let writer_path = variant.map_or_else(|| quote!(#writer_ident), |v| quote!(#writer_ident::#v));
+    let write_pattern = wrap(source_path.clone(), write_bindings);
+    let write_value = wrap(writer_path, write_values);
     let pattern = wrap(source_path.clone(), payload_bindings);
     let read_pattern = wrap(wire_path, read_bindings);
     let value = wrap(source_path, values);
     match wire {
         syn::Fields::Named(fields) => fields.named = wire_fields,
         syn::Fields::Unnamed(fields) => fields.unnamed = wire_fields,
+        syn::Fields::Unit => (),
+    }
+    match &mut write_fields {
+        syn::Fields::Named(fields) => fields.named = borrowed_fields,
+        syn::Fields::Unnamed(fields) => fields.unnamed = borrowed_fields,
         syn::Fields::Unit => (),
     }
     let payload = if marked.is_some() {
@@ -326,7 +374,61 @@ fn payload_fields(
         descriptor,
         payload: quote!(#pattern => #payload),
         decode: quote!(#read_pattern => #value),
+        write: quote!(#write_pattern => #write_value),
+        write_fields,
     })
+}
+
+// Preserve field adapters while borrowing their source values. This lets the
+// ordinary wincode derive retain responsibility for enum tags and field encoding.
+fn borrowed_field(field: &syn::Field, krate: &proc_macro2::TokenStream) -> syn::Result<syn::Field> {
+    let mut borrowed = field.clone();
+    let ty = &field.ty;
+    borrowed.ty = syn::parse_quote!(&'__event_write #ty);
+    let mut replaced = false;
+    for attr in &mut borrowed.attrs {
+        if !attr.path().is_ident("wincode") {
+            continue;
+        }
+        let mut options = attr.parse_args_with(
+            syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+        )?;
+        for option in &mut options {
+            if let syn::Meta::NameValue(value) = option
+                && value.path.is_ident("with")
+            {
+                let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(adapter),
+                    ..
+                }) = &value.value
+                else {
+                    return Err(syn::Error::new_spanned(
+                        value,
+                        "expected a schema type string",
+                    ));
+                };
+                let adapter: syn::Type = adapter.parse()?;
+                let adapter = LitStr::new(
+                    &quote!(#krate::__private::BorrowedSchema<'__event_write, #adapter>)
+                        .to_string(),
+                    Span::call_site(),
+                );
+                value.value = syn::parse_quote!(#adapter);
+                replaced = true;
+            }
+        }
+        *attr = syn::parse_quote!(#[wincode(#options)]);
+    }
+    if !replaced {
+        let adapter = LitStr::new(
+            &quote!(#krate::__private::BorrowedSchema<'__event_write, #ty>).to_string(),
+            Span::call_site(),
+        );
+        borrowed
+            .attrs
+            .push(syn::parse_quote!(#[wincode(with = #adapter)]));
+    }
+    Ok(borrowed)
 }
 
 fn event_system_crate() -> syn::Result<proc_macro2::TokenStream> {

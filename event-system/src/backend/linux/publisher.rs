@@ -1,5 +1,5 @@
 use {
-    super::payload_ring::{PayloadHandle, PayloadRing},
+    super::payload_ring::PayloadRing,
     crate::{
         Event,
         backend::linux::{AtomicStreamRule, StreamGuard},
@@ -22,24 +22,6 @@ struct PayloadState {
     allocations: VecDeque<(usize, u64)>,
 }
 
-fn write_handle<E: Event>(
-    schema: &crate::payload::StreamSchema,
-    cell: &mut [u8],
-    handle: PayloadHandle,
-) -> Result<bool, PublishError> {
-    if !E::HAS_PAYLOAD {
-        return Ok(false);
-    }
-    let Some(range) = schema
-        .payload_range(cell)
-        .map_err(PublishError::PayloadStorage)?
-    else {
-        return Ok(false);
-    };
-    wincode::serialize_into(&mut cell[range], &handle).map_err(PublishError::Serialization)?;
-    Ok(true)
-}
-
 impl<E: Event> Publisher<E> {
     pub(crate) fn publish(&mut self, event: &E::View<'_>) -> Result<(), PublishError> {
         if !self.stream_rule.is_on() {
@@ -58,12 +40,9 @@ impl<E: Event> Publisher<E> {
         // bytes. Event::QueueCell is valid for every bit pattern and has no padding.
         let cell = unsafe { prepared.as_mut().assume_init_mut() };
 
-        wincode::serialize_into(cell.as_mut(), &event).map_err(PublishError::Serialization)?;
-        write_handle::<E>(
-            &self.stream_guard.schema,
-            cell.as_mut(),
-            PayloadHandle::default(),
-        )?;
+        event
+            .write_event(cell.as_mut(), [0, 0])
+            .map_err(PublishError::Serialization)?;
 
         // SAFETY: serialization succeeded, and the entire cell remains initialized,
         // including any unused bytes after the encoded event.
@@ -117,10 +96,9 @@ impl<E: Event> Publisher<E> {
         let lane = prepared.producer_index();
         // SAFETY: the memfd is zero-filled and serialization leaves initialized bytes.
         let cell = unsafe { prepared.as_mut().assume_init_mut() };
-        wincode::serialize_into(cell.as_mut(), event).map_err(PublishError::Serialization)?;
-        if !write_handle::<E>(&self.stream_guard.schema, cell.as_mut(), handle)? {
-            return Err(PublishError::PayloadNotEnabled);
-        }
+        event
+            .write_event(cell.as_mut(), [handle.offset, handle.len])
+            .map_err(PublishError::Serialization)?;
         // SAFETY: this producer exclusively owns its non-reused lane. The FIFO
         // allocator reuses only prefixes proven inaccessible by this lane's
         // synchronized watermark. bytes cannot alias an unpublished allocation.
@@ -159,16 +137,9 @@ impl<E: Event> Publisher<E> {
             // bytes. Event::QueueCell is valid for every bit pattern and has no padding.
             let cell = unsafe { prepared.as_mut(i).assume_init_mut() };
 
-            let result = wincode::serialize_into(cell.as_mut(), &event)
-                .map_err(PublishError::Serialization)
-                .and_then(|_| {
-                    write_handle::<E>(
-                        &self.stream_guard.schema,
-                        cell.as_mut(),
-                        PayloadHandle::default(),
-                    )
-                    .map(|_| ())
-                });
+            let result = event
+                .write_event(cell.as_mut(), [0, 0])
+                .map_err(PublishError::Serialization);
             if let Err(error) = result {
                 // SAFETY: cells before i contain successfully serialized events with
                 // fully initialized bytes. The failed cell and suffix are not published.

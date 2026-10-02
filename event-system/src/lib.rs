@@ -37,7 +37,10 @@ pub mod subscriber;
 
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::{payload::PayloadSlice, stream_name::macro_support::stream_name};
+    pub use crate::{
+        payload::{BorrowedSchema, PayloadSlice},
+        stream_name::macro_support::stream_name,
+    };
 
     pub mod event_macro {
         pub use {wincode::*, wincode_dynamic::*};
@@ -163,7 +166,8 @@ mod timestamp;
 /// variant, consistently with the runtime schema: two adjacent u64 fields,
 /// offset then length. `payload_data` must return the corresponding source bytes.
 /// Every `View` must have the same wire schema, markers, and queue cell layout.
-/// Its header writer must encode placeholders, never caller-supplied handles.
+/// `write_event` must write the supplied handle into exactly the marked fields,
+/// without using offsets or lengths from the event's source data.
 pub unsafe trait Event:
     Sized + SchemaDynamic + SchemaWrite<DefaultConfig, Src = Self>
 {
@@ -181,6 +185,14 @@ pub unsafe trait Event:
     /// Decode metadata and attach the payload already resolved by the held guard.
     #[doc(hidden)]
     fn decode_event<'a>(header: &[u8], payload: &'a [u8]) -> wincode::ReadResult<Self::View<'a>>;
+
+    /// Serialize the cell header, writing the library-allocated payload handle.
+    /// Payload events override this with a generated writer; fixed-size events
+    /// retain ordinary serialization.
+    #[doc(hidden)]
+    fn write_event(&self, cell: &mut [u8], _handle: [u64; 2]) -> wincode::WriteResult<()> {
+        wincode::serialize_into(cell, self)
+    }
 
     /// Whether any variant contains a `#[payload]` field.
     const HAS_PAYLOAD: bool = false;

@@ -606,3 +606,45 @@ fn reader_markers_cannot_redirect_resolution_to_unallocated_bytes() {
     assert_eq!(event.right, b"safe");
     assert_eq!((event.left_offset, event.left_len), (0, 4));
 }
+
+#[test]
+fn generated_writer_emits_handles_in_wire_order_without_cloning_metadata() {
+    use agave_event_system::{Event, wincode};
+
+    #[event(max_serialized_size = 128)]
+    #[wincode(tag_encoding = "u8")]
+    enum Header<'a> {
+        Named {
+            prefix: String,
+            #[payload]
+            data: &'a [u8],
+            trailer: u32,
+        },
+        Tuple(Vec<u8>, #[payload] &'a [u8], u16),
+        Done {
+            sequence: u64,
+        },
+    }
+
+    for prefix in ["", "variable-length metadata before the handle"] {
+        let event = Header::Named {
+            prefix: prefix.into(),
+            data: b"source",
+            trailer: 42,
+        };
+        let mut encoded = [0; 128];
+        event.write_event(&mut encoded, [123, 6]).unwrap();
+        let expected = wincode::serialize(&(0u8, prefix.to_owned(), 123u64, 6u64, 42u32)).unwrap();
+        assert_eq!(&encoded[..expected.len()], expected);
+    }
+    let event = Header::Tuple(vec![1, 2, 3], b"data", 7);
+    let mut encoded = [0; 128];
+    event.write_event(&mut encoded, [321, 4]).unwrap();
+    let expected = wincode::serialize(&(1u8, vec![1u8, 2, 3], 321u64, 4u64, 7u16)).unwrap();
+    assert_eq!(&encoded[..expected.len()], expected);
+
+    let event = Header::Done { sequence: 9 };
+    event.write_event(&mut encoded, [0, 0]).unwrap();
+    let expected = wincode::serialize(&event).unwrap();
+    assert_eq!(&encoded[..expected.len()], expected);
+}
