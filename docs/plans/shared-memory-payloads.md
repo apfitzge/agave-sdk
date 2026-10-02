@@ -14,8 +14,14 @@ the PoC. Live slow consumers also retain their allocations until they advance.
   `/home/apfitzge/dev/shaq/worktrees/variable-sized-payload-broadcast`, including
   bounded queue regions, prepared writes, and reclamation watermarks.
   Leave shaq unchanged. See [the historical handoff](shaq-payload-prerequisites.md).
-- `backend/linux/stream_layout.rs`: version-1 stream header and page-aligned
-  broadcast queue at a nonzero offset in the same sealed shared file.
+- `backend/linux/stream_layout.rs`: version-2 stream header with the relocated
+  broadcast queue and optional per-producer payload regions in the same sealed
+  file. Descriptors record offset, usable capacity, page-aligned stride, and lane
+  count. Disabled payload storage adds no bytes. Version 1 is rejected.
+- Internal `create_sealed_queue_with_payloads` sizes those regions. Existing
+  stream creation still requests zero payload capacity; public opt-in and mapping
+  will be added with payload publication. Discovery checks the advertised payload
+  lane count against the queue.
 - `backend/linux/publisher.rs`: reserve before serialization and commit only
   successfully serialized events. Disabled streams return before reservation.
 
@@ -23,7 +29,7 @@ The standalone offset allocator is implemented in
 `backend/linux/payload_ring.rs`: contiguous byte ranges, wrap-padding accounting,
 cancellable reservations, checked logical positions, and explicit FIFO-prefix
 reclamation. Its state is entirely producer-local; it does not map or copy bytes.
-Shared payload storage, broadcast bookkeeping, and typed access remain to be
+Payload mappings/copying, broadcast bookkeeping, and typed access remain to be
 integrated. Seven unit tests cover the allocator's boundary and failure cases.
 
 ## Allocator

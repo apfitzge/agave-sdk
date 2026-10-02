@@ -273,6 +273,15 @@ fn open_queue(
         )
     }?;
 
+    if stream_layout.payload_capacity != 0
+        && stream_layout.payload_lanes != broadcast_handle.producer_slots() as u64
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "payload lane count does not match queue",
+        )
+        .into());
+    }
     let actual_broadcast_identifier = broadcast_handle.queue_identifier();
 
     // The publisher's descriptor number may be reused for another queue

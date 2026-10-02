@@ -171,6 +171,15 @@ fn create_sealed_queue<E: Event>(
     stream_config: StreamConfig,
     queue_identifier: u64,
 ) -> Result<(Broadcast<E::QueueCell>, File), CreateStreamError> {
+    create_sealed_queue_with_payloads::<E>(stream_config, queue_identifier, 0)
+}
+
+// Internal storage foundation; the payload publication API will opt in here.
+fn create_sealed_queue_with_payloads<E: Event>(
+    stream_config: StreamConfig,
+    queue_identifier: u64,
+    payload_capacity: u64,
+) -> Result<(Broadcast<E::QueueCell>, File), CreateStreamError> {
     let broadcast_config = BroadcastConfig {
         capacity: stream_config.capacity,
         producer_slots: stream_config.publisher_slots,
@@ -179,7 +188,8 @@ fn create_sealed_queue<E: Event>(
     let queue_layout = broadcast_config
         .layout::<E::QueueCell>()
         .map_err(|error| CreateStreamError::Queue(PublicEventQueueError(error)))?;
-    let stream_layout = StreamLayout::new(queue_layout, queue_identifier)?;
+    let stream_layout = StreamLayout::new(queue_layout, queue_identifier)?
+        .with_payloads(payload_capacity, stream_config.publisher_slots)?;
 
     let check_libc_result = |result: i32| {
         if result == -1 {
@@ -421,6 +431,42 @@ mod tests {
         assert_eq!(held.as_slice(), 42u64.to_le_bytes());
         assert_eq!(held.lane_metadata().producer_id().get(), 456);
         assert_eq!(StreamLayout::read(&file).unwrap(), layout);
+    }
+
+    #[test]
+    fn payload_lanes_share_the_sealed_file_without_touching_the_queue() {
+        use std::os::unix::fs::FileExt;
+        let config = StreamConfig {
+            publisher_slots: 2,
+            ..TEST_CONFIG
+        };
+        let (broadcast, file) =
+            super::create_sealed_queue_with_payloads::<TestEvent>(config, 42, 5001).unwrap();
+        let layout = StreamLayout::read(&file).unwrap();
+        assert_eq!(layout.payload_lanes, 2);
+        let (first, capacity) = layout.payload_region(0).unwrap();
+        let (second, _) = layout.payload_region(1).unwrap();
+        assert_eq!(capacity, 5001);
+        let mut bytes = [1; 4];
+        file.read_exact_at(&mut bytes, first).unwrap();
+        assert_eq!(bytes, [0; 4]);
+        file.write_all_at(b"lane", first).unwrap();
+        file.read_exact_at(&mut bytes, second).unwrap();
+        assert_eq!(bytes, [0; 4]);
+        file.read_exact_at(&mut bytes, first).unwrap();
+        assert_eq!(&bytes, b"lane");
+        let mut consumer = broadcast.consumer().unwrap();
+        let mut producer = broadcast.producer(ProducerId::new(1)).unwrap();
+        producer
+            .try_prepare_write()
+            .unwrap()
+            .commit(42u64.to_le_bytes());
+        assert_eq!(consumer.try_read().unwrap(), 42u64.to_le_bytes());
+        assert!(
+            file.set_len(layout.file_len.checked_add(1).unwrap())
+                .is_err()
+        );
+        assert!(file.set_len(layout.queue_offset).is_err());
     }
 
     #[test]
