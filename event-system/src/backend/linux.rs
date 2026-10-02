@@ -29,6 +29,10 @@ pub(crate) use {
 
 #[path = "linux/publisher.rs"]
 mod publisher;
+// Standalone allocator PoC; publication/mapping integration follows separately.
+#[allow(dead_code)]
+#[path = "linux/payload_ring.rs"]
+mod payload_ring;
 #[path = "linux/stream_layout.rs"]
 mod stream_layout;
 #[path = "linux/stream_policy.rs"]

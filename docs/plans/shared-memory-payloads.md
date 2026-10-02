@@ -19,7 +19,12 @@ the PoC. Live slow consumers also retain their allocations until they advance.
 - `backend/linux/publisher.rs`: reserve before serialization and commit only
   successfully serialized events. Disabled streams return before reservation.
 
-The payload allocator and typed payload integration remain to be implemented.
+The standalone offset allocator is implemented in
+`backend/linux/payload_ring.rs`: contiguous byte ranges, wrap-padding accounting,
+cancellable reservations, checked logical positions, and explicit FIFO-prefix
+reclamation. Its state is entirely producer-local; it does not map or copy bytes.
+Shared payload storage, broadcast bookkeeping, and typed access remain to be
+integrated. Seven unit tests cover the allocator's boundary and failure cases.
 
 ## Allocator
 
