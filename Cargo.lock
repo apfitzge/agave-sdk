@@ -1377,6 +1377,7 @@ dependencies = [
 [[package]]
 name = "shaq"
 version = "4.4.0"
+source = "git+https://github.com/apfitzge/shaq.git?branch=variable-sized-payload-broadcast#be7ebfd6b61e9574a69ecb64faf404885e2844aa"
 dependencies = [
  "libc",
  "windows-sys",

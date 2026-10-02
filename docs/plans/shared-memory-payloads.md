@@ -10,8 +10,8 @@ the PoC. Live slow consumers retain their allocations until they advance.
 
 ## Implemented path
 
-- Local shaq 4.4.0 branch at
-  `/home/apfitzge/dev/shaq/worktrees/variable-sized-payload-broadcast`, including
+- Shaq 4.4.0 from the
+  [`variable-sized-payload-broadcast` branch](https://github.com/apfitzge/shaq/tree/variable-sized-payload-broadcast), including
   bounded queue regions, prepared writes, and synchronized reclamation watermarks.
   Shaq is unchanged. See [the historical handoff](shaq-payload-prerequisites.md).
 - `backend/linux/stream_layout.rs`: version-5 stream header, relocated broadcast

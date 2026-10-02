@@ -46,7 +46,7 @@ proc-macro2 = "1.0.106"
 quote = "1.0.46"
 rstest = "0.27.0"
 rts-alloc = "5.1.0"
-shaq = { path = "/home/apfitzge/dev/shaq/worktrees/variable-sized-payload-broadcast" }
+shaq = { git = "https://github.com/apfitzge/shaq.git", branch = "variable-sized-payload-broadcast" }
 solana-bls-signatures = { version = "4.0.0", features = ["serde"] }
 solana-clock = "4.0.0"
 solana-hash = "4.6.0"
