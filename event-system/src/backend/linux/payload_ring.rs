@@ -5,11 +5,7 @@
 //! The integration layer owns copying, publication, and proof that a committed
 //! allocation is no longer readable before reclaiming through its logical end.
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct PayloadHandle {
-    pub(super) offset: u64,
-    pub(super) len: u64,
-}
+pub(super) use crate::payload::PayloadHandle;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ReserveError {

@@ -17,8 +17,9 @@ impl<E: Event> Publisher<E> {
     /// Publishes an event if the stream is enabled.
     ///
     /// Returns an error without publishing the event if the queue is full or
-    /// serialization fails.
-    pub fn publish(&mut self, event: &E) -> Result<(), PublishError> {
+    /// serialization fails. Marked payload slices are copied into shared memory;
+    /// their source buffers need only remain valid for this call.
+    pub fn publish(&mut self, event: &E::View<'_>) -> Result<(), PublishError> {
         self.inner.publish(event)
     }
 
@@ -32,7 +33,9 @@ impl<E: Event> Publisher<E> {
     /// are not published.
     ///
     /// A panic during serialization cancels the entire batch.
-    pub fn publish_batch(&mut self, events: &[E]) -> Result<(), PublishError> {
+    /// Payload-bearing variants are currently supported only by `publish`;
+    /// a batch containing one is rejected before publishing any events.
+    pub fn publish_batch(&mut self, events: &[E::View<'_>]) -> Result<(), PublishError> {
         self.inner.publish_batch(events)
     }
 
@@ -56,4 +59,12 @@ pub enum PublishError {
     Serialization(wincode::WriteError),
     #[error("Failed to send the event. Back-pressured by event subscribers.")]
     FailedToSend,
+    #[error("the event or stream does not support shared payloads")]
+    PayloadNotEnabled,
+    #[error("publish payload-bearing events individually")]
+    PayloadBatchUnsupported,
+    #[error("payload ring is full, payload is too large, or its positions are exhausted")]
+    PayloadCapacity,
+    #[error("invalid payload storage access")]
+    PayloadStorage(#[source] std::io::Error),
 }

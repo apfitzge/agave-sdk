@@ -40,6 +40,23 @@ impl EventSystem {
             .map(PublisherFactory::new)
     }
 
+    /// Create a stream with a FIFO payload ring of `payload_capacity` bytes per
+    /// producer. `E` must use `#[payload]`; capacity must be nonzero.
+    /// Crashed consumers can retain storage indefinitely in this PoC.
+    pub fn create_stream_with_payloads<E: Event>(
+        &self,
+        stream_name: StreamName,
+        stream_config: StreamConfig,
+        payload_capacity: u64,
+    ) -> Result<PublisherFactory<E>, CreateStreamError> {
+        if !E::HAS_PAYLOAD || payload_capacity == 0 {
+            return Err(CreateStreamError::InvalidPayloadConfig);
+        }
+        self.backend
+            .create_stream_with_payloads::<E>(stream_name, stream_config, payload_capacity)
+            .map(PublisherFactory::new)
+    }
+
     /// Applies the given [`StreamPolicy`] on the streams created by this
     /// [`EventSystem`].
     ///
@@ -81,6 +98,8 @@ pub struct EventQueueError(#[source] pub(crate) backend::EventQueueError);
 
 #[derive(Debug, Error)]
 pub enum CreateStreamError {
+    #[error("payload streams require an event with a #[payload] field and nonzero capacity")]
+    InvalidPayloadConfig,
     #[error("failed to serialize the event-stream schema")]
     FailedToSerializeSchema(#[source] wincode::WriteError),
     #[error("failed to create the event-stream files")]

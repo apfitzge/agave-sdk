@@ -26,12 +26,12 @@ impl<E> Debug for Publisher<E> {
     }
 }
 
-impl<E> Publisher<E> {
-    pub(crate) fn publish(&mut self, _event: &E) -> Result<(), PublishError> {
+impl<E: Event> Publisher<E> {
+    pub(crate) fn publish(&mut self, _event: &E::View<'_>) -> Result<(), PublishError> {
         Ok(())
     }
 
-    pub(crate) fn publish_batch(&mut self, _events: &[E]) -> Result<(), PublishError> {
+    pub(crate) fn publish_batch(&mut self, _events: &[E::View<'_>]) -> Result<(), PublishError> {
         Ok(())
     }
 }
@@ -56,6 +56,15 @@ impl EventSystem {
         _stream_config: StreamConfig,
     ) -> Result<PublisherFactory<E>, CreateStreamError> {
         Ok(PublisherFactory::new())
+    }
+
+    pub(crate) fn create_stream_with_payloads<E: Event>(
+        &self,
+        name: StreamName,
+        config: StreamConfig,
+        _capacity: u64,
+    ) -> Result<PublisherFactory<E>, CreateStreamError> {
+        self.create_stream::<E>(name, config)
     }
 
     pub(crate) fn set_stream_policy(&self, _new_stream_policy: StreamPolicy) {}
@@ -143,6 +152,10 @@ impl<'a> StreamMessage<'a> {
 
     pub(crate) fn payload(&self) -> &[u8] {
         self.payload
+    }
+
+    pub(crate) fn shared_payload(&self) -> Result<&[u8], std::io::Error> {
+        Ok(&[])
     }
 
     pub(crate) fn publisher_metadata(&self) -> PublisherMetadata<'_> {

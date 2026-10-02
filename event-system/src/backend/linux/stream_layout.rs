@@ -1,6 +1,6 @@
 //! The enclosing stream file format, independent of shaq's queue layout.
 //!
-//! Version 2 begins with sixteen little-endian u64 words (128 bytes):
+//! Version 4 begins with sixteen little-endian u64 words (128 bytes):
 //! magic, format version, header length, file length, identifier, queue offset,
 //! queue length, shaq format version, queue ABI, payload offset, payload capacity
 //! per lane, payload stride, payload lane count, and three reserved zero words.
@@ -10,6 +10,7 @@
 //! The queue and each payload lane start on page boundaries. Payload descriptors
 //! are all zero when disabled. Stride includes page padding; capacity does not.
 //! Payload bytes follow the queue in the same file. Older formats are rejected.
+//! Version 4 also requires payload markers in the companion event schema.
 //!
 //! The header is immutable after creation. Initialize the queue first, write
 //! this header, seal the file against resizing, then publish the stream directory.
@@ -19,7 +20,7 @@
 use std::{alloc::Layout, fs::File, io, os::unix::fs::FileExt};
 
 const MAGIC: u64 = u64::from_le_bytes(*b"agaveevt");
-const VERSION: u64 = 2;
+const VERSION: u64 = 5;
 const HEADER_LEN: usize = 128;
 const QUEUE_ABI: u64 = (usize::BITS as u64) | ((cfg!(target_endian = "big") as u64) << 32);
 
@@ -243,13 +244,16 @@ mod tests {
         let mut bytes = [0; 16];
         file.read_exact_at(&mut bytes, 0).unwrap();
         assert_eq!(&bytes[..8], b"agaveevt");
-        assert_eq!(&bytes[8..], &2u64.to_le_bytes());
+        assert_eq!(&bytes[8..], &5u64.to_le_bytes());
     }
 
     #[rstest]
     #[case::legacy_magic(0, u64::from_be_bytes(*b"shaqcast"))]
     #[case::old_version(1, 1)]
-    #[case::future_version(1, 3)]
+    #[case::storage_only_version(1, 2)]
+    #[case::prefix_version(1, 3)]
+    #[case::handle_version(1, 4)]
+    #[case::future_version(1, 6)]
     #[case::header_len(2, 0)]
     #[case::file_len(3, u64::MAX)]
     #[case::queue_overlaps_header(5, 0)]

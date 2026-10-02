@@ -179,6 +179,10 @@ unsafe impl SchemaWrite<DefaultConfig> for PanickingEvent {
 
 // SAFETY: the cell is a byte array with no padding, valid for every bit pattern.
 unsafe impl Event for PanickingEvent {
+    type View<'a> = Self;
+    fn decode_event(header: &[u8], _: &[u8]) -> agave_event_system::wincode::ReadResult<Self> {
+        agave_event_system::wincode::deserialize(header)
+    }
     type QueueCell = [u8; 16];
 }
 

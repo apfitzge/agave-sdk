@@ -2,7 +2,6 @@ pub use wincode::ReadError;
 use {
     crate::{backend, stream_name::StreamName},
     std::{marker::PhantomData, path::PathBuf, time::Duration},
-    wincode::Deserialize,
     wincode_dynamic::{Decoder, Fields, RootSchema},
 };
 
@@ -30,7 +29,15 @@ impl StreamExplorer {
 }
 
 /// Marker for dynamically reflecting over stream messages.
+/// It exposes numeric payload offset/length fields, with no allocation accessor.
 /// See [`Subscriber`] for details on subscriber modes.
+///
+/// ```compile_fail
+/// use agave_event_system::subscriber::{Dynamic, StreamMessage};
+/// fn invalid(message: &StreamMessage<'_, Dynamic>) {
+///     let _ = message.payload();
+/// }
+/// ```
 #[derive(Debug)]
 pub struct Dynamic;
 
@@ -130,12 +137,30 @@ impl<'a, Mode> StreamMessage<'a, Mode> {
     }
 }
 
-impl<T> StreamMessage<'_, Typed<T>>
-where
-    T: for<'de> Deserialize<'de, Dst = T>,
-{
-    pub fn decode(&self) -> Result<T, ReadError> {
-        wincode::deserialize(self.backend.payload())
+impl<T: crate::Event> StreamMessage<'_, Typed<T>> {
+    /// Decode an event, borrowing marked payload slices from this held cell.
+    /// The returned event cannot retain those slices after the cell is released.
+    ///
+    /// ```compile_fail
+    /// use agave_event_system::{event, subscriber::{Subscriber, Typed}};
+    /// #[event]
+    /// struct Update<'a> { #[payload] data: &'a [u8] }
+    /// fn invalid(subscriber: &mut Subscriber<Typed<Update<'static>>>) {
+    ///     let held = subscriber.try_recv().unwrap();
+    ///     let update = held.decode().unwrap();
+    ///     drop(held);
+    ///     println!("{:?}", update.data);
+    /// }
+    /// ```
+    pub fn decode(&self) -> Result<T::View<'_>, ReadError> {
+        let payload = if T::HAS_PAYLOAD {
+            self.backend
+                .shared_payload()
+                .map_err(|_| ReadError::InvalidValue("invalid shared payload"))?
+        } else {
+            &[]
+        };
+        T::decode_event(self.backend.payload(), payload)
     }
 }
 

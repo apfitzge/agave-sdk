@@ -27,16 +27,12 @@ pub(crate) use {
     subscriber::{AvailableStream, PublisherMetadata, StreamExplorer, StreamMessage, Subscriber},
 };
 
-#[path = "linux/publisher.rs"]
-mod publisher;
-// Standalone allocator PoC; publication/mapping integration follows separately.
-#[allow(dead_code)]
 #[path = "linux/payload_ring.rs"]
 mod payload_ring;
-// Mapping layer is wired into publication in the next PoC step.
-#[allow(dead_code)]
 #[path = "linux/payload_storage.rs"]
 mod payload_storage;
+#[path = "linux/publisher.rs"]
+mod publisher;
 #[path = "linux/stream_layout.rs"]
 mod stream_layout;
 #[path = "linux/stream_policy.rs"]
@@ -105,6 +101,15 @@ impl EventSystem {
         stream_name: StreamName,
         stream_config: StreamConfig,
     ) -> Result<PublisherFactory<E>, CreateStreamError> {
+        self.create_stream_with_payloads::<E>(stream_name, stream_config, 0)
+    }
+
+    pub(crate) fn create_stream_with_payloads<E: Event>(
+        &self,
+        stream_name: StreamName,
+        stream_config: StreamConfig,
+        payload_capacity: u64,
+    ) -> Result<PublisherFactory<E>, CreateStreamError> {
         let event_stream_directory = self
             .event_system_directory
             .join(STREAMS_DIRECTORY_NAME)
@@ -124,14 +129,19 @@ impl EventSystem {
             .write(true)
             .create_new(true)
             .open(schema_file_path)?;
+        let schema = crate::payload::StreamSchema::new::<E>();
         let encoded_schema =
-            wincode::serialize(&E::schema()).map_err(CreateStreamError::FailedToSerializeSchema)?;
+            wincode::serialize(&schema).map_err(CreateStreamError::FailedToSerializeSchema)?;
         schema_file.write_all(&encoded_schema)?;
 
         let queue_identifier = getrandom::u64()
             .map_err(io::Error::from)
             .map_err(CreateStreamError::OsRngFailure)?;
-        let (broadcast, queue_file) = create_sealed_queue::<E>(stream_config, queue_identifier)?;
+        let (broadcast, queue_file) = create_sealed_queue_with_payloads::<E>(
+            stream_config,
+            queue_identifier,
+            payload_capacity,
+        )?;
 
         let queue_file_name = format!("{QUEUE_FILE_NAME_PREFIX}{queue_identifier}");
         let queue_file_path = temporary_event_stream_directory
@@ -142,12 +152,17 @@ impl EventSystem {
         let proc_fd_path = format!("/proc/{process_id}/fd/{queue_fd}");
         symlink(proc_fd_path, queue_file_path)?;
 
+        let payload_storage = payload_storage::PayloadStorage::map(&queue_file, true)?;
         temporary_event_stream_directory.publish(&event_stream_directory)?;
 
         let stream_guard = Arc::new(StreamGuard {
             event_stream_directory: event_stream_directory.into(),
             stream_name: Arc::new(stream_name),
             _queue_file: queue_file,
+            payload_storage,
+            schema,
+            payload_capacity,
+            queue_capacity: stream_config.capacity,
         });
 
         let mut stream_policy_manager_guard = self.stream_policy_manager.lock().unwrap();
@@ -171,6 +186,7 @@ impl EventSystem {
 
 /// Creates a stream header and queue backed by a sealed file.
 /// Returns both the [`Broadcast`] and its backing [`File`].
+#[cfg(test)]
 fn create_sealed_queue<E: Event>(
     stream_config: StreamConfig,
     queue_identifier: u64,
@@ -178,7 +194,6 @@ fn create_sealed_queue<E: Event>(
     create_sealed_queue_with_payloads::<E>(stream_config, queue_identifier, 0)
 }
 
-// Internal storage foundation; the payload publication API will opt in here.
 fn create_sealed_queue_with_payloads<E: Event>(
     stream_config: StreamConfig,
     queue_identifier: u64,
@@ -305,6 +320,10 @@ struct StreamGuard {
     stream_name: Arc<StreamName>,
     // keeps the anonymous file alive
     _queue_file: File,
+    payload_storage: Option<payload_storage::PayloadStorage>,
+    schema: crate::payload::StreamSchema,
+    payload_capacity: u64,
+    queue_capacity: usize,
 }
 
 impl Drop for StreamGuard {

@@ -1,7 +1,7 @@
 use {
     super::{
         QUEUE_FILE_NAME_PREFIX, REQUIRED_SEALS, SCHEMA_FILE_NAME, STREAMS_DIRECTORY_NAME,
-        stream_layout::StreamLayout,
+        payload_ring::PayloadHandle, payload_storage::PayloadStorage, stream_layout::StreamLayout,
     },
     crate::{
         stream_name::{StreamName, StreamNameValidationError},
@@ -29,8 +29,9 @@ use {
 #[derive(Debug)]
 pub(crate) struct Subscriber {
     slice_consumer: shaq::broadcast::SliceConsumer,
+    payload_storage: Option<PayloadStorage>,
     stream_name: StreamName,
-    schema: RootSchema,
+    schema: crate::payload::StreamSchema,
 }
 
 impl Subscriber {
@@ -40,7 +41,7 @@ impl Subscriber {
     }
     /// The name of the type that is sent on the stream.
     pub(crate) fn type_name(&self) -> &str {
-        self.schema.name()
+        self.schema.event.name()
     }
 
     /// Returns a message if there is any unseen message in the stream.
@@ -49,6 +50,7 @@ impl Subscriber {
 
         Ok(StreamMessage {
             schema: &self.schema,
+            payload_storage: self.payload_storage.as_ref(),
             read_guard,
         })
     }
@@ -64,6 +66,7 @@ impl Subscriber {
 
         Ok(StreamMessage {
             schema: &self.schema,
+            payload_storage: self.payload_storage.as_ref(),
             read_guard,
         })
     }
@@ -71,17 +74,39 @@ impl Subscriber {
 
 #[derive(Debug)]
 pub(crate) struct StreamMessage<'a> {
-    schema: &'a RootSchema,
+    schema: &'a crate::payload::StreamSchema,
     read_guard: SliceReadGuard<'a>,
+    payload_storage: Option<&'a PayloadStorage>,
 }
 
 impl<'a> StreamMessage<'a> {
     pub(crate) fn schema(&self) -> &'a RootSchema {
-        self.schema
+        &self.schema.event
     }
 
     pub(crate) fn payload(&self) -> &[u8] {
         self.read_guard.as_slice()
+    }
+
+    pub(crate) fn shared_payload(&self) -> io::Result<&[u8]> {
+        let Some(range) = self.schema.payload_range(self.payload())? else {
+            return Ok(&[]);
+        };
+        let encoded = &self.payload()[range];
+        let handle = PayloadHandle {
+            offset: u64::from_le_bytes(encoded[..8].try_into().unwrap()),
+            len: u64::from_le_bytes(encoded[8..].try_into().unwrap()),
+        };
+        if handle == (PayloadHandle { offset: 0, len: 0 }) {
+            return Ok(&[]);
+        }
+        let storage = self
+            .payload_storage
+            .ok_or_else(|| io::Error::other("payload storage is disabled"))?;
+        // SAFETY: only typed payload access calls this. The producer authored the
+        // handle after copying and before release-publication. This acquired guard
+        // pins its allocation against reclamation for the returned self-borrow.
+        unsafe { storage.read(self.read_guard.lane_metadata().lane(), handle) }
     }
 
     pub(crate) fn publisher_metadata(&self) -> PublisherMetadata<'_> {
@@ -139,8 +164,9 @@ impl StreamExplorer {
 #[derive(Debug)]
 pub(crate) struct AvailableStream {
     stream_name: StreamName,
-    schema: RootSchema,
+    schema: crate::payload::StreamSchema,
     broadcast_handle: Broadcast<UnknownType>,
+    payload_storage: Option<PayloadStorage>,
 }
 
 impl AvailableStream {
@@ -155,6 +181,7 @@ impl AvailableStream {
 
         Ok(Subscriber {
             slice_consumer,
+            payload_storage: self.payload_storage,
             stream_name: self.stream_name,
             schema: self.schema,
         })
@@ -165,11 +192,11 @@ impl AvailableStream {
     }
 
     pub(crate) fn type_name(&self) -> &str {
-        self.schema.name()
+        self.schema.event.name()
     }
 
     pub(crate) fn stream_schema(&self) -> &RootSchema {
-        &self.schema
+        &self.schema.event
     }
 
     /// Creates an [`AvailableStream`] if the given stream directory passes validation.
@@ -200,19 +227,27 @@ impl AvailableStream {
         .map_err(io::Error::from)?;
 
         let schema = read_schema(&stream_directory)?;
-        let broadcast_handle = open_queue(&mut stream_directory)?;
+        let (broadcast_handle, payload_storage) = open_queue_and_payload(&mut stream_directory)?;
 
         Ok(Self {
             stream_name,
             schema,
             broadcast_handle,
+            payload_storage,
         })
     }
 }
 
+#[cfg(test)]
 fn open_queue(
     stream_directory: &mut Dir,
 ) -> Result<Broadcast<UnknownType>, CreateAvailableStreamError> {
+    open_queue_and_payload(stream_directory).map(|(queue, _)| queue)
+}
+
+fn open_queue_and_payload(
+    stream_directory: &mut Dir,
+) -> Result<(Broadcast<UnknownType>, Option<PayloadStorage>), CreateAvailableStreamError> {
     let queue_file_entry = stream_directory
         .iter()
         .filter_map(Result::ok)
@@ -293,10 +328,13 @@ fn open_queue(
         });
     }
 
-    Ok(broadcast_handle)
+    let storage = PayloadStorage::map(&queue_file, false)?;
+    Ok((broadcast_handle, storage))
 }
 
-fn read_schema(stream_directory: &Dir) -> Result<RootSchema, CreateAvailableStreamError> {
+fn read_schema(
+    stream_directory: &Dir,
+) -> Result<crate::payload::StreamSchema, CreateAvailableStreamError> {
     let mut schema_file = File::from(
         openat(
             stream_directory,
@@ -309,7 +347,7 @@ fn read_schema(stream_directory: &Dir) -> Result<RootSchema, CreateAvailableStre
 
     let mut encoded_schema = Vec::new();
     schema_file.read_to_end(&mut encoded_schema)?;
-    let schema: RootSchema = wincode::deserialize(&encoded_schema)?;
+    let schema: crate::payload::StreamSchema = wincode::deserialize(&encoded_schema)?;
     Ok(schema)
 }
 

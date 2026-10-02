@@ -24,7 +24,7 @@ fn toggling_stream_policy_for_live_event_system() {
     let create_publisher = |stream_name| {
         test_context
             .event_system
-            .create_stream(stream_name, TEST_CONFIG)
+            .create_stream::<TestEvent>(stream_name, TEST_CONFIG)
             .unwrap()
             .try_create_publisher()
             .unwrap()

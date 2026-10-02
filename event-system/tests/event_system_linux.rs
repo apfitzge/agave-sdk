@@ -183,7 +183,7 @@ fn typed_subscribers_can_connect_and_receive_events(#[values(1, 2)] subscriber_s
 #[rstest]
 #[case::struct_event(TestEvent { value: 42 }, None)]
 #[case::enum_event(TestEnumEvent::Value { value: 42 }, Some("Value"))]
-fn dynamic_subscriber_can_connect_and_decode_events<E: Event>(
+fn dynamic_subscriber_can_connect_and_decode_events<E: for<'a> Event<View<'a> = E>>(
     #[case] event: E,
     #[case] expected_variant_name: Option<&str>,
 ) {
